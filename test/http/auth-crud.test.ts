@@ -177,6 +177,19 @@ describe('company / site / contract / member CRUD with role authorization', () =
     expect((await app.request('/companies', json(alice, null))).status).toBe(400);
   });
 
+  it('malformed JSON body is 400 invalid_json; an unexpected server error is a generic 500 without the message', async () => {
+    const bad = await app.request('/companies', { method: 'POST', headers: { cookie: alice, 'content-type': 'application/json' }, body: '{not json' });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: 'invalid_json' });
+
+    const boom = createApp({ db, auth: { authenticate: async () => { throw new Error('db exploded: secret detail'); } } });
+    const res = await boom.request('/me/companies');
+    expect(res.status).toBe(500);
+    const body = await res.text();
+    expect(body).toContain('internal');
+    expect(body).not.toContain('secret detail');
+  });
+
   it('role update via members endpoint is an upsert (bob promoted to project_admin can now create a site)', async () => {
     const up = await app.request(`/companies/${companyId}/members`, json(alice, { email: 'bob@b.test', role: 'project_admin' }));
     expect(up.status).toBe(201);

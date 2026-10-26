@@ -71,6 +71,7 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
     if (err instanceof HTTPException) return err.getResponse();
     if (err instanceof BoqImportError) return c.json({ error: err.code, message: err.message, details: err.details }, 422);
     if (err instanceof z.ZodError) return c.json({ error: 'invalid_request', issues: err.issues }, 400);
+    if (err instanceof SyntaxError) return c.json({ error: 'invalid_json', message: 'Body bukan JSON yang valid.' }, 400);
     if (isUniqueViolation(err)) return c.json({ error: 'conflict', message: 'Data dengan kode/nomor yang sama sudah ada.' }, 409);
     console.error('unhandled', err);
     return c.json({ error: 'internal', message: 'Terjadi kesalahan pada server.' }, 500);
