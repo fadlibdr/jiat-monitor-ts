@@ -4,7 +4,9 @@
   "private": true,
   "description": "JIAT Monitor — standalone service: BOQ import, receipt intake validation, multi-company tenancy (TypeScript rewrite of jiat-monitor Build 01)",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
@@ -16,7 +18,9 @@
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.13",
     "@hono/node-server": "^2.1.5",
+    "better-auth": "^1.7.13",
     "drizzle-orm": "^0.45.4",
     "exceljs": "^4.4.0",
     "hono": "^4.13.14",

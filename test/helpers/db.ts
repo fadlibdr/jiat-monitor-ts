@@ -22,7 +22,10 @@ export async function createTestDb(): Promise<{ db: Db; owner: Db; close: () => 
   await owner.execute(sql.raw(`GRANT jiat_app, jiat_holding TO jiat_login`));
   // Everything the tests do as "the app" goes through this wrapper; it is still the same PGlite
   // connection, so SET ROLE jiat_login first makes the subsequent SET LOCAL ROLE jiat_app non-owner.
-  await owner.execute(sql.raw(`SET ROLE jiat_login`));
+  // Production: `ALTER ROLE <login> SET role = jiat_app` (db:migrate does this), so a fresh
+  // connection already runs as jiat_app and Better Auth's own queries (outside withCompany) have
+  // the right grants. Mirror that here.
+  await owner.execute(sql.raw(`SET ROLE jiat_app`));
   return { db: owner, owner, close: () => client.close() };
 }
 
@@ -32,6 +35,6 @@ export async function asOwner<T>(db: Db, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    await db.execute(sql.raw('SET ROLE jiat_login'));
+    await db.execute(sql.raw('SET ROLE jiat_app'));
   }
 }

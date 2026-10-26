@@ -22,15 +22,29 @@ Stack: Node ≥ 22 · TypeScript (strict) · Hono · Drizzle ORM · PostgreSQL 1
 | `value_total` kontrak | Disimpan bebas | Diturunkan: `value_dpp_cents` + `ppn_rate_bp` | L8 |
 | Header RAB "Jumlah" = volume | Kolom tertukar | ≥ 2 header jumlah/total tanpa "Volume": pertama = qty, terakhir = jumlah; `harga == jumlah` ditolak | L1 |
 
+## Auth (standalone, tanpa ERP)
+
+Better Auth 1.7 (`src/auth/better-auth.ts`): email + password, sesi **server-side** di tabel `sessions`,
+cookie `jiat.session_token` httpOnly/SameSite=Lax (Secure di production), cookie cache dimatikan sehingga
+setiap request terproteksi memvalidasi sesi ke database. Id user serial (`users.id`) → dipakai langsung
+oleh `company_users`. Sign-up mandiri **tertutup** secara default; buat pengguna lewat CLI (password dari stdin):
+
+```bash
+echo -n 'password-minimal-12-karakter' | npx tsx src/cli/create-user.ts admin@pii.co.id "Admin PII"
+```
+
+Endpoint Better Auth di `/api/auth/*` (`sign-in/email`, `sign-out`, `get-session`, …).
+
 ## Struktur
 
 ```
 src/domain/        money, date, hamming, categories, correction, receipt-validator  (murni, tanpa I/O)
 src/boq/           parser (exceljs → pohon, sen), importer (versi + bobot Σ = 100 %), errors
 src/db/            schema (Drizzle), rls (DDL policy), tenant (withCompany / withHoldingRead / withApp), client, migrate
-src/auth/          Authenticator interface + headerAuthenticator (dev/test saja, menolak NODE_ENV=production)
-src/http/          Hono app: /health, /me/companies, /holding/companies, /companies/:id/contracts/:id/boq[/import]
-test/              119 test (unit domain, parser, importer & tenancy di PGlite, HTTP end-to-end)
+src/auth/          Authenticator interface; better-auth.ts (produksi); headerAuthenticator (test saja, menolak production)
+src/http/          Hono app: /api/auth/*, /health, /me, /companies (+ members, sites, contracts, boq)
+src/cli/           create-user.ts
+test/              133 test (unit domain, parser, importer & RLS tenancy di PGlite, auth + CRUD + BOQ HTTP end-to-end)
 ```
 
 ## Menjalankan
@@ -53,10 +67,18 @@ Role login di `DATABASE_URL` harus **anggota** keduanya dan **bukan** pemilik ta
 
 ## API
 
+Peran per perusahaan (`company_users.role`): `site_staff` < `project_admin` < `company_manager` < `system_admin`.
+Baca: semua anggota. Buat site/kontrak/impor BOQ: `project_admin`+. Kelola anggota: `company_manager`+.
+
 | Method | Path | Catatan |
 |---|---|---|
 | GET | `/health` | — |
+| POST | `/api/auth/sign-in/email` … | Better Auth |
 | GET | `/me/companies` | perusahaan + peran si pemanggil |
+| POST | `/companies` | pendiri menjadi `company_manager`; `409` kode ganda |
+| GET/POST | `/companies/:companyId/members` | `{email, role, siteIds?}`; upsert; `404` email belum terdaftar |
+| GET/POST | `/companies/:companyId/sites` | `409` kode ganda per perusahaan |
+| GET/POST | `/companies/:companyId/contracts` | `valueTotalCents` diturunkan dari DPP × PPN; `404` site milik perusahaan lain |
 | GET | `/holding/companies` | hanya `management_viewers`; read-only |
 | POST | `/companies/:companyId/contracts/:contractId/boq/import?sheet=RAB` | multipart `file` (.xlsx ≤ 15 MB). `201` ringkasan; `422` `{error: total_mismatch\|sheet_missing\|…, details}`; tidak ada yang ditulis saat gagal |
 | GET | `/companies/:companyId/contracts/:contractId/boq` | versi `is_current` + item |
@@ -65,8 +87,8 @@ Semua `/companies/:companyId/*` → `401` tanpa principal, `403` bila bukan angg
 
 ## Belum ada (urutan berikutnya)
 
-1. **Auth produksi**: adapter Better Auth (sesi cookie httpOnly, validasi server-side) ke `users.id`. `headerAuthenticator` hanya untuk dev/test dan menolak `NODE_ENV=production`.
-2. Endpoint CRUD companies/sites/contracts/memberships (sekarang hanya lewat seed/SQL).
-3. Intake Fase 2: webhook WhatsApp/Telegram, job OCR, `vendor_invoices`, V8–V10 (sha256/pHash/trigram) — `hamming.ts` dan `receipt-validator.ts` sudah siap dipakai.
-4. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
-5. Materialized view progres (LLD §8) — join ke `is_leaf`, bobot sudah di-rollup ke induk.
+1. Intake Fase 2: webhook WhatsApp/Telegram, job OCR, `vendor_invoices`, V8–V10 (sha256/pHash/trigram) — `hamming.ts` dan `receipt-validator.ts` sudah siap dipakai.
+2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
+3. Materialized view progres (LLD §8) — join ke `is_leaf`, bobot sudah di-rollup ke induk.
+4. Rate limiting pada `/api/auth/sign-in/email` (Better Auth punya opsi `rateLimit`; aktifkan dengan store Redis saat ada lebih dari satu instance).
+5. PUT/DELETE untuk sites/contracts/members, dan `management_viewers` lewat API (sekarang lewat SQL).

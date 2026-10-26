@@ -16,6 +16,16 @@ async function main(): Promise<void> {
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
     for (const stmt of rlsStatements()) await db.execute(sql.raw(stmt));
+    // The API's login role must run as jiat_app by default (RLS applies to it, grants exist for it)
+    // and be allowed to SET LOCAL ROLE jiat_holding. Role name from env; never hard-coded.
+    const loginRole = process.env['DATABASE_APP_LOGIN_ROLE'];
+    if (loginRole) {
+      if (!/^[a-z_][a-z0-9_]*$/.test(loginRole)) throw new Error(`DATABASE_APP_LOGIN_ROLE tidak valid: ${loginRole}`);
+      await db.execute(sql.raw(`GRANT jiat_app, jiat_holding TO ${loginRole}`));
+      await db.execute(sql.raw(`ALTER ROLE ${loginRole} SET role = jiat_app`));
+    } else {
+      console.warn('DATABASE_APP_LOGIN_ROLE tidak diisi: jalankan sendiri GRANT jiat_app, jiat_holding TO <login>; ALTER ROLE <login> SET role = jiat_app');
+    }
     const [row] = await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM pg_policies WHERE schemaname = 'public'`);
     console.log(`Migrasi selesai. Policy RLS aktif: ${row?.n ?? '?'}`);
   } finally {
