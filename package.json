@@ -1,0 +1,34 @@
+{
+  "name": "jiat-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JIAT Monitor — standalone service: BOQ import, receipt intake validation, multi-company tenancy (TypeScript rewrite of jiat-monitor Build 01)",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "drizzle-orm": "^0.45.4",
+    "exceljs": "^4.4.0",
+    "hono": "^4.13.14",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "@types/node": "^22.0.0",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5"
+  }
+}
