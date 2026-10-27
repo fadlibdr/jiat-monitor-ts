@@ -62,20 +62,41 @@ export async function issueTermInvoice(tx: Tx, actor: { companyId: number; userI
     effectiveDppCents: effective.valueDppEffectiveCents, ppnRateBp: k.ppnRateBp, retentionBp: k.retentionBp, advanceCents: k.advanceCents,
     termPercentBp: term.percentBp, previousDppCents: Number(prev[0]!.dpp), previousAdvanceDeductionCents: Number(prev[0]!.adv), isLastTerm,
   });
+  // an addendum that lowered the contract below what is already billed leaves less than nothing for
+  // this termin: such an invoice could never be paid, so it is not issued. Exactly nothing (rounding
+  // on a tiny contract) is issued as already settled, so it does not wait for a payment forever.
+  if (amounts.dppCents < 0 || amounts.totalCents < 0) {
+    throw new HTTPException(409, { message: `Termin ${term.seq} bernilai negatif: DPP efektif sudah tertagih melebihi nilai kontrak; periksa adendum.` });
+  }
+  const settled = amounts.totalCents === 0;
   const [site] = await tx.select({ code: sites.code }).from(sites).where(eq(sites.id, k.siteId));
   const number = await nextDocNumber(tx, actor.companyId, 'INV', site?.code ?? null, input.invoiceDate);
   const [row] = await tx.insert(salesInvoices).values({
     companyId: actor.companyId, siteId: k.siteId, contractId: k.id, termId: term.id, number,
     invoiceDate: input.invoiceDate, dueDate: addDays(input.invoiceDate, term.dueDays), progressMicroPct: actualMicroPct, ...amounts,
+    ...(settled ? { status: 'paid' as const } : {}),
   }).returning();
   return row!;
 }
 
-/** Cancels an invoice that has no payment yet (the termin can then be re-issued). */
+/**
+ * Cancels an invoice that has no payment yet (the termin can then be re-issued). Only the latest live
+ * termin of the contract: termin are billed in order, and the last one "takes the rest", so
+ * cancelling an earlier one under a later one would let it be re-billed out of order on other values.
+ */
 export async function cancelSalesInvoice(tx: Tx, invoiceId: number) {
   const [inv] = await tx.select().from(salesInvoices).where(eq(salesInvoices.id, invoiceId)).for('update');
   if (!inv) throw new HTTPException(404, { message: 'Tagihan tidak ditemukan.' });
   if (inv.status !== 'issued') throw new HTTPException(409, { message: `Tagihan berstatus ${inv.status}; hanya yang belum dibayar bisa dibatalkan.` });
+  // the contract row serializes cancel and issue of one contract (issueTermInvoice locks it too)
+  await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, inv.contractId)).for('update');
+  const later = await tx.select({ seq: contractTerms.seq, number: salesInvoices.number }).from(salesInvoices)
+    .innerJoin(contractTerms, eq(contractTerms.id, salesInvoices.termId))
+    .where(and(eq(salesInvoices.contractId, inv.contractId), ne(salesInvoices.status, 'cancelled'), ne(salesInvoices.id, inv.id),
+      sql`${contractTerms.seq} > (SELECT seq FROM contract_terms WHERE id = ${inv.termId})`));
+  if (later.length) {
+    throw new HTTPException(409, { message: `Batalkan dulu tagihan termin berikutnya (${later.map((l) => `termin ${l.seq}: ${l.number}`).join(', ')}).` });
+  }
   const [row] = await tx.update(salesInvoices).set({ status: 'cancelled' }).where(eq(salesInvoices.id, invoiceId)).returning();
   return row!;
 }
@@ -129,7 +150,7 @@ export async function receivables(tx: Tx, today: Date) {
   const paid = await paidBy(tx, 'sales_invoices', invs.map((i) => i.id));
   return invs.map((i) => {
     const balanceCents = i.totalCents - (paid.get(i.id) ?? 0);
-    const age = -(daysLeft(i.invoiceDate, today) ?? 0);
+    const age = 0 - (daysLeft(i.invoiceDate, today) ?? 0); // 0 - 0 is 0, while -(0) would be -0
     return { id: i.id, number: i.number, siteId: i.siteId, contractId: i.contractId, invoiceDate: i.invoiceDate, dueDate: i.dueDate, totalCents: i.totalCents, balanceCents, ageDays: age, bucket: agingBucket(age) as AgingBucket };
   }).filter((r) => r.balanceCents > 0);
 }

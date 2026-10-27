@@ -7,6 +7,7 @@ import type { Authenticator } from '../auth/authenticator.js';
 import type { Auth } from '../auth/better-auth.js';
 import { BoqImportError } from '../boq/errors.js';
 import { companies, companyUsers } from '../db/schema.js';
+import { AmountOutOfRange } from '../domain/contract.js';
 import { siteScopeFor, withApp, type Db } from '../db/tenant.js';
 import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps } from './context.js';
 import { registerAdminRoutes } from './routes/admin.js';
@@ -68,6 +69,7 @@ export function createApp({
     if (err instanceof BoqImportError) return c.json({ error: err.code, message: err.message, details: err.details }, 422);
     if (err instanceof z.ZodError) return c.json({ error: 'invalid_request', issues: err.issues }, 400);
     if (err instanceof SyntaxError) return c.json({ error: 'invalid_json', message: 'Body bukan JSON yang valid.' }, 400);
+    if (err instanceof AmountOutOfRange) return c.json({ error: 'invalid_request', message: 'Jumlah atau nilai di luar batas yang dapat dihitung.' }, 400);
     switch (pgCode(err)) {
       case '23505': return c.json({ error: 'conflict', message: 'Data dengan kode/nomor yang sama sudah ada.' }, 409);
       case '23503': return c.json({ error: 'conflict', message: 'Data masih dirujuk oleh data lain.' }, 409);

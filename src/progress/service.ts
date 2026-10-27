@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, type SQL } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { mulDiv } from '../domain/contract.js';
 import { parseQty, qtyToString } from '../domain/quantity.js';
 import { computeSCurve, MICRO_100, pctToMicro, periodOf, type ActualPoint, type PlanPoint } from '../domain/scurve.js';
 import { codesOf, currentLeaves, type BoqItemRow } from '../boq/current.js';
-import { boqSchedules, contracts, progressItems, progressReports } from '../db/schema.js';
+import { boqItems, boqSchedules, boqVersions, contracts, progressItems, progressReports } from '../db/schema.js';
 import type { Tx } from '../db/tenant.js';
 
 /**
@@ -52,11 +52,30 @@ export async function putSchedule(tx: Tx, companyId: number, contractId: number,
 
 export async function getSchedule(tx: Tx, contractId: number) {
   const leaves = await currentLeaves(tx, contractId);
+  const order = new Map(leaves.map((l, i) => [l.code, i]));
+  return (await currentPlan(tx, contractId, leaves))
+    .sort((a, b) => order.get(a.code)! - order.get(b.code)! || a.period.localeCompare(b.period))
+    .map((p) => ({ code: p.code, period: p.period, plannedPct: p.plannedMicroPct / 1_000_000 }));
+}
+
+/**
+ * The plan of the current BOQ, by code. Plans are stored per BOQ item of one version; a re-import
+ * makes a new version with new item ids, so the plan is read from the NEWEST version of the
+ * contract that has one, matched to the current leaves by code — like the actuals. A re-import
+ * therefore keeps the plan of every unchanged code, and a PUT after it replaces the plan whole.
+ */
+async function currentPlan(tx: Tx, contractId: number, leaves: readonly BoqItemRow[]): Promise<PlanPoint[]> {
   if (!leaves.length) return [];
-  const rows = await tx.select().from(boqSchedules).where(inArray(boqSchedules.boqItemId, leaves.map((l) => l.id)))
-    .orderBy(asc(boqSchedules.boqItemId), asc(boqSchedules.period));
-  const code = new Map(leaves.map((l) => [l.id, l.code]));
-  return rows.map((r) => ({ code: code.get(r.boqItemId)!, period: r.period, plannedPct: r.plannedMicroPct / 1_000_000 }));
+  const rows = await tx.select({ version: boqVersions.version, code: boqItems.code, period: boqSchedules.period, plannedMicroPct: boqSchedules.plannedMicroPct })
+    .from(boqSchedules)
+    .innerJoin(boqItems, eq(boqItems.id, boqSchedules.boqItemId))
+    .innerJoin(boqVersions, eq(boqVersions.id, boqItems.versionId))
+    .where(eq(boqVersions.contractId, contractId));
+  if (!rows.length) return [];
+  const newest = Math.max(...rows.map((r) => r.version));
+  const current = new Set(leaves.map((l) => l.code));
+  return rows.filter((r) => r.version === newest && current.has(r.code))
+    .map((r) => ({ code: r.code, period: r.period, plannedMicroPct: r.plannedMicroPct }));
 }
 
 // --- opname reports ---
@@ -85,7 +104,7 @@ export async function putReportItems(tx: Tx, companyId: number, reportId: number
   const leaves = await currentLeaves(tx, report.contractId);
   const byId = new Map(leaves.map((l) => [l.id, l]));
   const byCode = new Map(leaves.map((l) => [l.code, l]));
-  const previous = await lastApprovedByCode(tx, report.contractId, report.period);
+  const bounds = await approvedBounds(tx, report.contractId, report.period);
 
   const seen = new Set<number>();
   const rows = lines.map((line, k) => {
@@ -106,8 +125,8 @@ export async function putReportItems(tx: Tx, companyId: number, reportId: number
       micro = pctToMicro(line.cumulativePct);
     }
     if (micro === null || micro < 0 || micro > MICRO_100) throw new HTTPException(400, { message: `baris ${k + 1}: progres harus 0–100 %.` });
-    const before = previous.get(leaf.code) ?? 0;
-    if (micro < before) throw new HTTPException(400, { message: `baris ${k + 1}: progres ${leaf.code} turun dari ${before / 1_000_000}% (laporan disetujui sebelumnya).` });
+    const outOfOrder = monotonicViolation(bounds, leaf.code, micro);
+    if (outOfOrder) throw new HTTPException(400, { message: `baris ${k + 1}: ${outOfOrder}` });
     return { companyId, reportId, boqItemId: leaf.id, qtyDone, cumulativeMicroPct: micro };
   });
   await tx.delete(progressItems).where(eq(progressItems.reportId, reportId));
@@ -121,24 +140,46 @@ async function lockReport(tx: Tx, reportId: number) {
   return r;
 }
 
-/** code → cumulative micro-percent of the latest approved report strictly before `period`. */
-async function lastApprovedByCode(tx: Tx, contractId: number, period: string): Promise<Map<string, number>> {
-  const reports = await tx.select({ id: progressReports.id }).from(progressReports)
-    .where(and(eq(progressReports.contractId, contractId), eq(progressReports.status, 'approved'), lt(progressReports.period, period)))
-    .orderBy(desc(progressReports.period));
-  const out = new Map<string, number>();
+/**
+ * Cumulative progress may never go down along the APPROVED curve. Per code: the floor is the latest
+ * approved report before `period`, the ceiling the earliest approved report after it (a back-dated
+ * month must not exceed a later month that is already approved).
+ */
+interface Bounds { floor: Map<string, { micro: number; period: string }>; ceiling: Map<string, { micro: number; period: string }> }
+
+async function approvedBounds(tx: Tx, contractId: number, period: string): Promise<Bounds> {
+  const before = await approvedByCode(tx, contractId, lt(progressReports.period, period), 'latest');
+  const after = await approvedByCode(tx, contractId, gt(progressReports.period, period), 'earliest');
+  return { floor: before, ceiling: after };
+}
+
+function monotonicViolation(b: Bounds, code: string, micro: number): string | null {
+  const floor = b.floor.get(code);
+  if (floor && micro < floor.micro) return `progres ${code} turun dari ${floor.micro / 1_000_000}% (disetujui ${floor.period.slice(0, 7)}).`;
+  const ceiling = b.ceiling.get(code);
+  if (ceiling && micro > ceiling.micro) return `progres ${code} melebihi ${ceiling.micro / 1_000_000}% yang sudah disetujui untuk ${ceiling.period.slice(0, 7)}.`;
+  return null;
+}
+
+/** code → cumulative micro-percent of the latest (or earliest) approved report matching `when`. */
+async function approvedByCode(tx: Tx, contractId: number, when: SQL, pick: 'latest' | 'earliest') {
+  const reports = await tx.select({ id: progressReports.id, period: progressReports.period }).from(progressReports)
+    .where(and(eq(progressReports.contractId, contractId), eq(progressReports.status, 'approved'), when))
+    .orderBy(pick === 'latest' ? desc(progressReports.period) : asc(progressReports.period));
+  const out = new Map<string, { micro: number; period: string }>();
   if (!reports.length) return out;
   const items = await tx.select().from(progressItems).where(inArray(progressItems.reportId, reports.map((r) => r.id)));
   const codes = await codesOf(tx, items.map((i) => i.boqItemId));
-  const order = new Map(reports.map((r, i) => [r.id, i])); // 0 = latest
-  const best = new Map<string, { rank: number; micro: number }>();
+  const rank = new Map(reports.map((r, i) => [r.id, i])); // 0 = the one closest to the period
+  const periodOf = new Map(reports.map((r) => [r.id, r.period]));
+  const best = new Map<string, number>();
   for (const it of items) {
     const code = codes.get(it.boqItemId)!;
-    const rank = order.get(it.reportId)!;
-    const cur = best.get(code);
-    if (!cur || rank < cur.rank) best.set(code, { rank, micro: it.cumulativeMicroPct });
+    const r = rank.get(it.reportId)!;
+    if (best.has(code) && best.get(code)! <= r) continue;
+    best.set(code, r);
+    out.set(code, { micro: it.cumulativeMicroPct, period: periodOf.get(it.reportId)! });
   }
-  for (const [code, v] of best) out.set(code, v.micro);
   return out;
 }
 
@@ -157,6 +198,18 @@ export async function transitionReport(tx: Tx, reportId: number, action: keyof t
   if (action === 'submit') {
     const [one] = await tx.select({ id: progressItems.id }).from(progressItems).where(eq(progressItems.reportId, reportId)).limit(1);
     if (!one) throw new HTTPException(409, { message: 'Laporan kosong; isi item opname dulu.' });
+  }
+  if (action === 'approve') {
+    // re-checked here: another month may have been approved since these lines were saved. The
+    // contract row is locked so two approvals of one contract are checked one after the other.
+    await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, report.contractId)).for('update');
+    const bounds = await approvedBounds(tx, report.contractId, report.period);
+    const items = await tx.select().from(progressItems).where(eq(progressItems.reportId, reportId));
+    const codes = await codesOf(tx, items.map((i) => i.boqItemId));
+    for (const it of items) {
+      const outOfOrder = monotonicViolation(bounds, codes.get(it.boqItemId)!, it.cumulativeMicroPct);
+      if (outOfOrder) throw new HTTPException(409, { message: `Belum bisa disetujui: ${outOfOrder}` });
+    }
   }
   const approval = action === 'approve' ? { approvedBy: userId, approvedAt: new Date() } : {};
   const [row] = await tx.update(progressReports).set({ status: flow.to, ...approval }).where(eq(progressReports.id, reportId)).returning();
@@ -195,11 +248,7 @@ export async function latestActualMicro(tx: Tx, contractId: number): Promise<num
 export async function sCurveMicro(tx: Tx, contractId: number) {
   const leaves = await currentLeaves(tx, contractId);
   const leafWeights = leaves.map((l) => ({ code: l.code, weightMicroPct: l.weightMicroPct }));
-  const code = new Map(leaves.map((l) => [l.id, l.code]));
-  const schedules = leaves.length
-    ? await tx.select().from(boqSchedules).where(inArray(boqSchedules.boqItemId, leaves.map((l) => l.id)))
-    : [];
-  const plan: PlanPoint[] = schedules.map((s) => ({ code: code.get(s.boqItemId)!, period: s.period, plannedMicroPct: s.plannedMicroPct }));
+  const plan = await currentPlan(tx, contractId, leaves);
   const approved = await tx.select({ id: progressReports.id, period: progressReports.period }).from(progressReports)
     .where(and(eq(progressReports.contractId, contractId), eq(progressReports.status, 'approved')));
   const items = approved.length ? await tx.select().from(progressItems).where(inArray(progressItems.reportId, approved.map((r) => r.id))) : [];

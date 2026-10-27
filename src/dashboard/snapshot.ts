@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { and, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { daysLeft, effectiveContract } from '../domain/contract.js';
 import { lineAmountCents, parseQty } from '../domain/quantity.js';
@@ -44,7 +45,9 @@ const INTAKE_WINDOW_DAYS = 7;
 const DASH_LOCK = 4101;
 
 const monthOf = (iso: string) => `${iso.slice(0, 7)}-01`;
-const ageDays = (iso: string, now: Date) => -(daysLeft(iso, now) ?? 0);
+/** 16 hex of sha256 over the trimmed, lower-cased name: a stable, bounded key for an id-less vendor */
+const nameKey = (name: string | null) => createHash('sha256').update((name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()).digest('hex').slice(0, 16);
+const ageDays = (iso: string, now: Date) => 0 - (daysLeft(iso, now) ?? 0); // never -0
 
 export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Promise<SnapshotRows> {
   const currentPeriod = monthOf(now.toISOString().slice(0, 10));
@@ -209,8 +212,9 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
   const overdue = new Map<string, { vendorId: number | null; vendorName: string | null; siteId: number; cents: number; invoices: number; maxDays: number }>();
   for (const p of pay) {
     if (!p.overdue || p.dueDate === null) continue;
-    // a vendor without a master row (draft name only) is grouped by its id-less name
-    const key = `${p.vendorId ?? `?${(p.vendorName ?? '').slice(0, 40)}`}:site:${p.siteId}`;
+    // a vendor without a master row is grouped by its WHOLE name (hashed to fit dash_alerts.ref):
+    // two long names with a common prefix are two vendors
+    const key = `${p.vendorId ?? `?${nameKey(p.vendorName)}`}:site:${p.siteId}`;
     const o = overdue.get(key) ?? { vendorId: p.vendorId, vendorName: p.vendorName, siteId: p.siteId, cents: 0, invoices: 0, maxDays: 0 };
     o.cents += p.balanceCents;
     o.invoices += 1;
