@@ -4,6 +4,7 @@ Layanan mandiri untuk JIAT: impor BOQ/RAB per kontrak, validasi nota (intake), d
 Rewrite dari `fadlibdr/jiat-monitor` Build 01 (PHP/Laravel, fork Nusantara ERP) — **tanpa ERP, tanpa login ERP**.
 
 Stack: Node ≥ 22 · TypeScript (strict) · Hono · Drizzle ORM · PostgreSQL 15+ (RLS) · Zod · exceljs · Vitest (+ PGlite = Postgres di WASM, sehingga RLS diuji sungguhan).
+UI: React 19 + Vite (`web/`, paket sendiri), dibangun ke `web/dist` dan disajikan server API yang sama di `/app/` (cookie sesi yang sama, tanpa CORS).
 
 ## Keputusan desain (vs. Build 01 PHP)
 
@@ -70,23 +71,28 @@ src/progress/      service (rencana, opname, persetujuan, kurva S)
 src/finance/       service (tagihan termin, pembayaran, piutang/hutang, aging)
 src/dashboard/     snapshot (hitung + refresh), panels (agregasi bersama), export (XLSX), alert-text
 src/ops/           digest (DailyDigest), purge (berkas yatim, job lama), registry (job + jadwal)
-src/http/          app.ts (komposisi, error, log akses), context.ts (middleware, peran),
+src/http/          app.ts (komposisi, error, log akses), context.ts (middleware, peran), web.ts (SPA statis + CSP),
                    routes/{admin,company,holding,members,vendors,intake,telegram,procurement,progress,finance,dashboard}.ts
 src/log.ts         log JSON satu baris, redaksi kunci sensitif (rekening, NPWP, token, password, cookie)
 src/cli/           create-user.ts
 src/worker.ts      proses worker (job intake + job terjadwal)
 scripts/           backup-db.sh (pg_dump + retensi 30 hari, dijalankan cron host)
 test/              unit domain, parser, importer, RLS + lingkup site + audit di PGlite, auth + CRUD + holding HTTP,
-                   webhook + pipeline intake, pembelian, progres, keuangan, dashboard + rekonsiliasi, ops
+                   webhook + pipeline intake, pembelian, progres, keuangan, dashboard + rekonsiliasi, ops;
+                   test/web: format & label UI vs tabel server, tipe API UI vs tipe server (cek saat typecheck)
+web/               SPA: pages/ (Login, Home, IntakeReview, HoldingDashboard, CompanyArea), components/, lib/ (api,
+                   format, label, status: murni, ikut diuji suite root)
 ```
 
 ## Menjalankan
 
 ```bash
 npm install
-npm test            # 556 test, tanpa Postgres eksternal (PGlite)
+npm test            # 949 test, tanpa Postgres eksternal (PGlite)
 npm run typecheck
 npm run build
+(cd web && npm ci && npm run build)   # UI → web/dist, disajikan di /app/ (WEB_DIST_DIR); tanpa build, API tetap jalan
+(cd web && npm run dev)               # pengembangan UI: Vite di 127.0.0.1:5173, /api /me /companies /holding /admin diteruskan ke :3000
 
 # Postgres sungguhan
 cp .env.example .env            # isi DATABASE_URL (role jiat_app, BUKAN owner) dan DATABASE_URL_MIGRATE (owner)
@@ -100,7 +106,12 @@ Intake Telegram butuh `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (32–256 
 sebagai `secret_token` di `setWebhook`), `STORAGE_DIR`, dan `OCR_*` (endpoint OpenAI-compatible; model tahap 1 dan 2
 boleh berbeda). Ambang `INTAKE_QUALITY_MIN` / `INTAKE_TOTAL_CONFIDENCE_MIN` mengikuti LLD §5. Lihat `.env.example`.
 
-CI (`.github/workflows/ci.yml`) menjalankan typecheck, test, build, dan menolak perubahan `schema.ts` tanpa migrasi di `drizzle/`.
+CI (`.github/workflows/ci.yml`) menjalankan typecheck, test, build, dan menolak perubahan `schema.ts` tanpa migrasi di `drizzle/`;
+job `web` menjalankan typecheck + build UI dan menolak script inline di `index.html` (CSP server: `script-src 'self'`).
+
+UI (`/app/`): masuk, pilih perusahaan (+ tautkan Telegram), review nota (LLD §7), dashboard perusahaan (`finance`/manajer),
+dashboard holding (filter, segarkan, unduh XLSX). Header keamanan dari `src/http/web.ts`: CSP hanya `self` (tanpa script/style
+inline), `frame-ancestors 'none'`; aset ber-hash di-cache setahun, `index.html` tidak pernah di-cache.
 
 Role Postgres yang dibutuhkan (dibuat `db:migrate`, kecuali login): `jiat_app` (NOLOGIN, RLS), `jiat_holding` (NOLOGIN, SELECT lintas perusahaan).
 Role login di `DATABASE_URL` harus **anggota** keduanya dan **bukan** pemilik tabel — jika pemilik, RLS dilewati (superuser/owner bypass).
@@ -113,8 +124,10 @@ CREATE ROLE jiat_login LOGIN PASSWORD '…'; GRANT jiat_login TO jiat_owner WITH
 CREATE ROLE jiat_backup LOGIN BYPASSRLS PASSWORD '…'; GRANT pg_read_all_data TO jiat_backup;
 ```
 
-Diverifikasi pada PostgreSQL 16 sungguhan (bukan hanya PGlite): migrasi 0000–0005 + DDL RLS/audit idempoten (87 policy),
-alur PR → tagihan → dashboard holding sebagai `jiat_app` tanpa BYPASSRLS, dan backup → restore dengan jumlah baris identik.
+Diverifikasi pada PostgreSQL 16 sungguhan (bukan hanya PGlite): migrasi 0000–0007 + DDL RLS/audit idempoten (87 policy),
+alur PR → tagihan → dashboard holding sebagai `jiat_app` tanpa BYPASSRLS, backup → restore dengan jumlah baris identik, dan
+UI di Chromium (masuk, kata sandi salah, pilih perusahaan, review + konfirmasi nota, keluar, dashboard holding, segarkan,
+layar 390 px) tanpa galat konsol dan tanpa respons 5xx.
 
 ## Operasional
 
@@ -123,7 +136,10 @@ alur PR → tagihan → dashboard holding sebagai `jiat_app` tanpa BYPASSRLS, da
   `DAILY_DIGEST=0` mematikan ringkasan harian.
 - **DailyDigest 07:00 WIB**: pesan pribadi bot ke `project_admin` dan `company_manager` yang `telegramUserId`-nya terisi
   (mereka harus pernah memulai chat dengan bot): nota perlu cek / perlu konfirmasi, intake gagal 24 jam, peringatan **baru**.
-  Peringatan uang (piutang, hutang vendor) hanya untuk manajer. Sekali per perusahaan per hari (`daily_digests`).
+  Isi per penerima, dalam lingkup site-nya; peringatan uang (piutang, hutang vendor) hanya untuk manajer. Sekali per perusahaan
+  per hari (`daily_digests`: klaim 15 menit, daftar chat yang sudah terkirim — retry tidak mengirim dua kali; penerima yang
+  memblokir bot dilewati, bukan diulang). Slot yang baru jalan setelah lewat tengah malam WIB (worker mati, antrean panjang)
+  dibuang, bukan dikirim sebagai ringkasan hari ini.
 - **Purge 02:00 WIB**: berkas foto > 24 jam tanpa baris `attachments` (sisa crash), berkas `.tmp`, job selesai > 30 hari,
   job gagal > 90 hari.
 - **Backup 01:00 WIB**: `scripts/backup-db.sh` dari cron host, **bukan** worker — `pg_dump` harus membaca semua perusahaan,
@@ -147,7 +163,9 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | Method | Path | Catatan |
 |---|---|---|
 | GET | `/health` | — |
+| GET | `/` → `/app/` | UI (SPA); aset `/app/assets/*`, rute lain di `/app/*` → `index.html` |
 | POST | `/api/auth/sign-in/email` … | Better Auth |
+| GET | `/me` | `{id, name, email, isSystemAdmin, holdingViewer}` |
 | GET | `/me/companies` | perusahaan + peran si pemanggil |
 | POST | `/me/telegram-link` | kode sekali pakai (15 menit) untuk menghubungkan akun Telegram: kirim `/start <kode>` ke bot, atau buka `link` (`https://t.me/<bot>?start=<kode>`, bila `TELEGRAM_BOT_USERNAME` diisi) |
 | GET/POST/DELETE | `/companies/:companyId/members[/:userId]` | `{email, role, siteIds?}`; upsert; `404` email belum terdaftar; `409` bila menghapus/menurunkan `company_manager` terakhir |
@@ -168,23 +186,23 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | POST | `/telegram/webhook` | header `X-Telegram-Bot-Api-Secret-Token` (dibandingkan waktu-konstan): salah → `403`, secret tidak dikonfigurasi → `404`; chat tak dikenal/nonaktif dan teks yang bukan koreksi → `200` tanpa disimpan; idempoten per `(chat_id, message_id)`; event + job ditulis dalam satu transaksi, lalu `200` |
 | GET/POST · PATCH | `/companies/:companyId/vendors` · `…/vendors/:vendorId` | rekening & NPWP hanya dilihat **dan diubah** `finance` / manajer (`403` untuk peran lain) |
 | GET | `/companies/:companyId/intake/review?status=&siteId=&limit=` | default `perlu_konfirmasi` + `perlu_cek`; NPWP nota hanya untuk `finance` / manajer |
-| PATCH | `/companies/:companyId/intake/:rowId` | `{vendorId\|vendorName, category, totalCents ("Rp 2.450.000,-" juga), invoiceDate, docNumber, status}`; `409` ditutup / belum bisa dikonfirmasi / kembar terkonfirmasi |
+| PATCH | `/companies/:companyId/intake/:rowId` | `{vendorId\|vendorName, category, totalCents ("Rp 2.450.000,-" juga), invoiceDate, dueDate, docNumber, status}`; konfirmasi tanpa `dueDate` → tanggal nota + tempo vendor (`paymentTermsDays`, default 30); `400` total di bawah yang sudah dibayar / jatuh tempo sebelum tanggal nota; `409` ditutup / belum bisa dikonfirmasi / kembar terkonfirmasi |
 | GET | `/companies/:companyId/intake/:rowId/photo` | foto asli, `private`, tidak pernah URL publik |
 | GET · PUT | `/companies/:companyId/intake/:rowId/match-candidates` · `…/match` | PO di site yang sama (vendor sama bila diketahui), total terdekat dulu; `{poId\|null, grId?}`; `409` site/vendor/status berbeda atau GR bukan milik PO |
 | GET/POST | `/companies/:companyId/purchase-requests[/:id]` · POST `…/:id/submit\|approve\|reject` | tulis: `project_admin`/manajer; setuju/tolak: manajer |
 | GET/POST | `/companies/:companyId/purchase-orders[/:id]` · POST `…/:id/approve\|cancel` | nilai dihitung server; baris = item daun BOQ aktif; setuju → `issued`; batal hanya tanpa penerimaan |
-| POST · GET | `/companies/:companyId/purchase-orders/:id/receipts` · `/goods-receipts?poId=` | penerimaan sebagian/penuh; `409` melebihi yang dipesan |
+| POST · GET | `/companies/:companyId/purchase-orders/:id/receipts` · `/goods-receipts?poId=` | penerimaan sebagian/penuh; `409` melebihi yang dipesan; header `Idempotency-Key` (8–64 `A-Za-z0-9_-`): kirim ulang → `200` dengan penerimaan pertama |
 | GET | `/companies/:companyId/contracts/:contractId/commitments` | anggaran BOQ vs komitmen PO vs diterima, per item dan per kategori |
 | GET/PUT | `/companies/:companyId/contracts/:contractId/boq/schedule` | rencana `[{code\|null, period: "YYYY-MM", plannedPct}]`; PUT mengganti seluruh rencana; `400` rencana menurun |
 | GET/POST | `/companies/:companyId/progress-reports[/:id]` · PUT `…/:id/items` · POST `…/:id/submit\|approve\|reject` | opname `qtyDone` atau `cumulativePct`; isi & ajukan: `site_staff` ke atas; setuju: manajer; `409` progres turun / melebihi bulan yang sudah disetujui |
 | GET | `/companies/:companyId/contracts/:contractId/s-curve` | rencana vs realisasi tertimbang per bulan |
 | GET | `/companies/:companyId/contracts/:contractId/terms/status` | termin: ambang tercapai? sudah ditagih? |
 | POST · GET | `/companies/:companyId/invoices/sales/from-term` · `/invoices/sales` · POST `…/:id/cancel` | `finance`/manajer; `{contractId, termId, invoiceDate}`; `409` belum mencapai ambang / termin sebelumnya belum ditagih / sudah ditagih / bernilai negatif |
-| POST · GET | `/companies/:companyId/payments` | `{payableType: sales_invoices\|vendor_invoices, rowRef, paidAt, amountCents, method}`; `409` melebihi sisa |
+| POST · GET | `/companies/:companyId/payments` | `{payableType: sales_invoices\|vendor_invoices, rowRef, paidAt, amountCents, method}`; `409` melebihi sisa; `Idempotency-Key` seperti di atas (kunci sama untuk dokumen lain → `409`); GET `?payableType=&rowRef=` |
 | GET | `/companies/:companyId/receivables` · `/payables` | piutang dengan umur 0–30/31–60/61–90/>90; hutang vendor terkonfirmasi + lewat jatuh tempo |
-| GET | `/companies/:companyId/dashboard?period=&from=&to=&site_id=` | dihitung langsung dalam lingkup si pemanggil; panel keuangan + peringatan uang hanya untuk `finance`/manajer |
+| GET | `/companies/:companyId/dashboard?period=&from=&to=&site_id=` | `finance`/`company_manager` (LLD §4); dihitung langsung, panel sama dengan holding (`buildPanels`) |
 | GET | `/holding/dashboard` · `/summary` · `/progress` · `/procurement` · `/finance` · `/intake` · `/alerts` | dari snapshot; filter `companies[]`, `site_id`, `employer`, `status`, `period`, `from`, `to`; `meta.refreshedAt` = snapshot tertua yang dipilih ("data per HH:MM") |
-| POST | `/holding/refresh` | membangun ulang snapshot semua perusahaan; `429` + `Retry-After` bila < 1 menit sejak refresh terakhir |
+| POST | `/holding/refresh` | membangun ulang snapshot semua perusahaan; `429` + `Retry-After` bila < 1 menit sejak refresh terakhir atau masih berjalan; `staleCompanyIds` = perusahaan yang gagal (snapshot lama tetap dipakai) |
 | GET | `/holding/export?format=xlsx` | satu sheet per panel, angka sama dengan layar; PDF belum (keputusan §6) |
 
 Semua `/companies/:companyId/*` → `401` tanpa principal, `403` bila bukan anggota perusahaan tersebut (termasuk holding viewer dan admin sistem), `400` id tidak valid; data di luar lingkup site → `404`.
@@ -196,5 +214,6 @@ Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding
 1. **Golden set intake** (LLD §10): 30 foto nota asli dijalankan ke OCR sungguhan, hasil di `test/golden/results.csv`. Adapter OCR dan klien Telegram baru diuji terhadap server palsu.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
 3. **Konfirmasi bagian keuangan** atas rumus tagihan termin (retensi, potongan uang muka, dasar PPN) — `src/domain/invoice.ts`.
-4. **UI** (layar review, dashboard perusahaan & holding) dan **ekspor PDF** bulanan.
+4. **UI, layar berikutnya**: master data (site, kontrak, termin, vendor, anggota), PR/PO/GR, opname + rencana kurva S,
+   invoicing; **ekspor PDF** bulanan. Sudah ada: masuk, pilih perusahaan, review nota, dashboard perusahaan & holding.
 5. **Deploy ke VPS**: contoh konfigurasi di `deploy/` (Supervisor, nginx, cron); provider object storage (S3) masih terbuka.

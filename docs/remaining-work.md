@@ -44,7 +44,7 @@ The LLD describes Laravel 12 + Livewire 3 on a Nusantara ERP fork. This repo use
 | Active company | session + header switcher | company id in the URL path | No session switcher needed. The UI must route by `/companies/:id`. |
 | Money / percent | `numeric(18,2)` / `numeric(7,4)` | integer cents / micro-percent | The LLD MV SQL (§8) and invoice formulas must be rewritten for integers. |
 | BOQ re-import | replace in place | `boq_versions`, a new version each time | New design question, see §5.3. |
-| UI | Livewire components per module | none | Entire UI workstream is open (§4.10). |
+| UI | Livewire components per module | React + Vite SPA served by the API at `/app/` | Sign-in, picker, review, both dashboards built; data-entry screens open (§4.10). |
 | Queue / scheduler | Laravel `database` queue + Supervisor | none | Needs a Node job runner (§6, decision 7). |
 | Audit | Eloquent observers | none | No ORM observers in Drizzle. Use DB triggers or explicit writes (§4.9). |
 | API conventions | prefix `/api/v1`, errors `{code, message, fields}` | no prefix, errors `{error, message, details\|issues}` | Pick one and update the other (§5.11). |
@@ -186,11 +186,14 @@ Built: `parseIdrCents` and `parseIndonesianDate` (MoneyParser/DateParser), `pars
 
 ### 4.9 Audit, jobs, operations, security — M
 
-- [ ] **`audit_logs`:**
+- [x] **`audit_logs`:**
   - before/after on every transaction-table change
   - every chat correction
   - every holding request (user, time, route, filters) via an `AuditHoldingAccess` middleware
   - Postgres triggers fit the RLS-first design and cannot be bypassed by forgotten app code.
+  — **Done** (`src/db/audit.ts`): `jiat_audit` trigger on the transaction tables, `jiat_audit_event()` for chat corrections
+  (`src/intake/pipeline.ts`) and holding access (`src/http/context.ts`); both SECURITY DEFINER, so the app can append but never
+  edit or delete history.
 - [x] **Scheduled jobs:** `DailyDigest` (07:00 WIB), `PurgeFailedIntakeTemp` (02:00), `BackupDatabase` (01:00, `pg_dump` to object storage, 30-day retention). — **Done:** refresh + DailyDigest + purge in the worker (`jobs.dedupe_key`); BackupDatabase as `scripts/backup-db.sh` from host cron (verified dump → restore).
 - [x] **Structured JSON logging** with `company_id`, `chat_id`, `message_id` and no photo content or account numbers. Today unhandled errors go to `console.error` (`app.ts:76`). — **Done** (`src/log.ts`, key-based redaction).
 - [x] **Column-level PII control** for vendor bank account and NPWP (§5.8). — **Partly done:** enforced in the API (vendor bank/NPWP read and write only by finance/managers; receipt NPWP only to them); column-level grants in Postgres are still open.
@@ -199,20 +202,27 @@ Built: `parseIdrCents` and `parseIndonesianDate` (MoneyParser/DateParser), `pars
   - process manager for the API and worker
   - Postgres login role setup (`jiat_login`, a member of `jiat_app` and `jiat_holding`, not the owner)
   - TLS, backups and a restore drill
-- [ ] **CI:** run unit and feature tests plus the typecheck on every push (LLD §10). The repo has no CI workflow.
+- [x] **CI:** run unit and feature tests plus the typecheck on every push (LLD §10). — **Done** (`.github/workflows/ci.yml`):
+  typecheck, tests, build, migration drift; a second job builds the UI and rejects an inline script in its shell.
 
 ### 4.10 UI — XL (largest single workstream)
 
-None exists. In rough pilot-priority order:
+**Decision:** React 19 + Vite single-page app in `web/` (own package and lockfile), built to `web/dist` and served by the
+API server under `/app/` with a strict CSP: same origin and session cookie, no CORS, no second process. In rough
+pilot-priority order:
 
-1. **Login and company picker**, from `/me/companies`.
-2. **`IntakeReview`:** thumbnails with zoom, confidence colouring below 0.70, flags, near-duplicate candidates, Confirm/Reject/inline edit. Needed for the pilot.
-3. **Holding dashboard** per the mockup.
-4. **Master data:** sites, contracts, termin, addendum, BOQ import with its summary and errors, members.
-5. **PR/PO/GR forms and approvals.**
-6. **Opname entry and approval, S-curve chart.**
-7. **Invoicing and payments.**
-8. **Company dashboard.**
+1. [x] **Login and company picker**, from `/me` and `/me/companies` (plus Telegram linking).
+2. [x] **`IntakeReview`:** photo, confidence flags, near-duplicate candidates, Confirm/Reject/inline edit (vendor, date, due
+   date, total, number, category); finance reads only. *Open:* zoom beyond the browser's own, per-field colouring below 0.70.
+3. [x] **Holding dashboard** per the mockup: filters, refresh, XLSX export, S-curve on a calendar axis.
+4. [ ] **Master data:** sites, contracts, termin, addendum, BOQ import with its summary and errors, members.
+5. [ ] **PR/PO/GR forms and approvals.**
+6. [ ] **Opname entry and approval, S-curve plan entry.**
+7. [ ] **Invoicing and payments.**
+8. [x] **Company dashboard** (the same panels, live; finance and managers only, LLD §4).
+
+Checked in Chromium against PostgreSQL 16 (sign-in, wrong password, picker, review and confirm, sign-out, holding
+dashboard, refresh, 390 px screen): no console errors, no 5xx. Not yet automated in CI (it needs a browser and Postgres).
 
 ### 4.11 Test plan coverage (LLD §10)
 
