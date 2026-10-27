@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { pushSchema } from 'drizzle-kit/api';
@@ -13,7 +14,7 @@ import type { Db } from '../../src/db/tenant.js';
  * same shape production uses (pool role ≠ table owner).
  */
 export async function createTestDb(): Promise<{ db: Db; owner: Db; close: () => Promise<void> }> {
-  const client = new PGlite();
+  const client = new PGlite({ extensions: { pg_trgm } });
   const owner = drizzle(client, { schema }) as unknown as Db;
   const { apply } = await pushSchema(schema, owner as never);
   await apply();

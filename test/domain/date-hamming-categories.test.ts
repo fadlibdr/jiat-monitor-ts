@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseIndonesianDate } from '../../src/domain/date.js';
 import { hammingDistance, isNearDuplicate } from '../../src/domain/hamming.js';
-import { CATEGORIES, isCategory, normalizeCategory } from '../../src/domain/categories.js';
+import { CATEGORIES, categoryFromDescription, isCategory, normalizeCategory } from '../../src/domain/categories.js';
 
 describe('parseIndonesianDate', () => {
   it.each([
@@ -42,6 +42,21 @@ describe('hammingDistance (pHash 64-bit as 16 hex chars)', () => {
     expect(() => hammingDistance('abc', 'ab')).toThrow(RangeError);
     expect(() => hammingDistance('xyz', 'abc')).toThrow(RangeError);
     expect(() => hammingDistance('', 'a')).toThrow(RangeError);
+  });
+});
+
+describe('categoryFromDescription (intake fallback after vendor.default_category)', () => {
+  it('matches whole words only, case-insensitive', () => {
+    expect(categoryFromDescription('Semen 40 sak')).toBe('material');
+    expect(categoryFromDescription('SOLAR 200 liter')).toBe('operasional');
+    expect(categoryFromDescription('Sewa  alat molen 3 hari')).toBe('alat');
+    expect(categoryFromDescription('semennya kurang')).toBeNull(); // substring is not a word
+  });
+  it('null when nothing matches, when two categories match (ambiguous), or for empty input', () => {
+    expect(categoryFromDescription('Pembelian umum')).toBeNull();
+    expect(categoryFromDescription('Semen 40 sak + upah tukang')).toBeNull();
+    expect(categoryFromDescription('')).toBeNull();
+    expect(categoryFromDescription(null)).toBeNull();
   });
 });
 

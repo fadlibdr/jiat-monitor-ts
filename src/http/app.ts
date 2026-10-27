@@ -7,13 +7,18 @@ import type { Authenticator } from '../auth/authenticator.js';
 import type { Auth } from '../auth/better-auth.js';
 import { BoqImportError } from '../boq/errors.js';
 import { companies, companyUsers } from '../db/schema.js';
-import { withApp, type Db } from '../db/tenant.js';
+import { siteScopeFor, withApp, type Db } from '../db/tenant.js';
 import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps } from './context.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCompanyRoutes } from './routes/company.js';
 import { registerHoldingRoutes } from './routes/holding.js';
+import { registerIntakeRoutes } from './routes/intake.js';
 import { registerMemberRoutes } from './routes/members.js';
+import { registerTelegramWebhook } from './routes/telegram.js';
+import { registerVendorRoutes } from './routes/vendors.js';
 import { MANAGE_ROLES, requireRole } from './context.js';
+import type { ObjectStorage } from '../intake/storage.js';
+import { errorText } from '../jobs/queue.js';
 
 export { readUpload } from './context.js';
 
@@ -25,11 +30,17 @@ export interface AppDeps {
   trustedOrigins?: string[];
   maxUploadBytes?: number;
   now?: () => Date;
+  /** where intake photos are read from (review screen); absent → photo route answers 503 */
+  storage?: ObjectStorage;
+  /** TELEGRAM_WEBHOOK_SECRET; absent → the webhook route answers 404 */
+  telegramWebhookSecret?: string;
 }
 
 const MAX_UPLOAD = 15 * 1024 * 1024;
 
-export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date() }: AppDeps) {
+export function createApp({
+  db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date(), storage, telegramWebhookSecret,
+}: AppDeps) {
   const app = new Hono<AppEnv>();
   const deps: RouteDeps = { db, maxUploadBytes, now };
 
@@ -43,12 +54,20 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
       case '23503': return c.json({ error: 'conflict', message: 'Data masih dirujuk oleh data lain.' }, 409);
       // RLS WITH CHECK: e.g. writing a row for a site outside the caller's scope
       case '42501': return c.json({ error: 'forbidden', message: 'Akses ditolak oleh kebijakan data.' }, 403);
+      // a value the column cannot hold (too long, bad encoding/NUL, not a number): the request, not the server
+      case '22001': case '22021': case '22P02': case '22003':
+        return c.json({ error: 'invalid_request', message: 'Nilai tidak valid atau terlalu panjang.' }, 400);
     }
-    console.error('unhandled', err);
+    // errorText: the database's reason, never Drizzle's SQL + bound parameters (row data such as a
+    // vendor's bank account must not reach the logs, LLD §9)
+    console.error(JSON.stringify({ time: new Date().toISOString(), level: 'error', msg: 'unhandled', method: c.req.method, path: c.req.path, code: pgCode(err) ?? null, error: errorText(err) }));
     return c.json({ error: 'internal', message: 'Terjadi kesalahan pada server.' }, 500);
   });
 
   app.get('/health', (c) => c.json({ ok: true }));
+
+  // Telegram authenticates with its secret token, not a session (registered before the session gates)
+  registerTelegramWebhook(app, { db, secret: telegramWebhookSecret });
 
   if (betterAuth) {
     if (trustedOrigins.length) app.use('/api/auth/*', cors({ origin: trustedOrigins, credentials: true }));
@@ -83,23 +102,16 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
     if (!member) throw new HTTPException(403, { message: 'Anda tidak terdaftar pada perusahaan ini.' });
     c.set('companyId', companyId);
     c.set('role', member.role);
-    c.set('tenant', { companyId, userId, siteIds: siteScope(member.role, member.siteIds) });
+    c.set('tenant', { companyId, userId, siteIds: siteScopeFor(member.role, member.siteIds) });
     await next();
   });
 
   registerMemberRoutes(app, '/companies/:companyId/members', deps, { canRead: async (_c, next) => { await next(); }, canWrite: requireRole(MANAGE_ROLES) });
   registerCompanyRoutes(app, deps);
+  registerVendorRoutes(app, deps);
+  registerIntakeRoutes(app, deps, storage);
 
   return app;
-}
-
-/**
- * Site scope of a membership (HLD §2). site_staff see only the sites assigned to them — none until
- * assigned. Other roles see every site unless an explicit list was set on their membership.
- */
-export function siteScope(role: string, siteIds: number[] | null): number[] | null {
-  if (role === 'site_staff') return siteIds ?? [];
-  return siteIds;
 }
 
 function pgCode(err: unknown): string | undefined {

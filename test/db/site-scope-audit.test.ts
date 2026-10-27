@@ -112,7 +112,15 @@ describe('audit trail and authorship (Postgres triggers)', () => {
     expect(JSON.stringify(n)).toContain('"n":0');
   });
 
-  it('every table with created_by gets the stamp trigger (derived from the schema, not a list)', () => {
-    expect(stampedTables().sort()).toEqual(['contract_addendums', 'contract_terms', 'contracts', 'sites']);
+  it('every table with a created_by column has the stamp trigger installed (derived from the schema, not a list)', async () => {
+    const rowsOf = (r: unknown) => (Array.isArray(r) ? r : (r as { rows: unknown[] }).rows) as Array<Record<string, string>>;
+    const withColumn = rowsOf(await asOwner(db, () => db.execute(sql`
+      SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'created_by'`)))
+      .map((r) => r['table_name']!).sort();
+    const triggers = rowsOf(await asOwner(db, () => db.execute(sql`
+      SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE '%\_stamp'`))).map((r) => r['tgname']!);
+    expect(stampedTables().sort()).toEqual(withColumn);
+    expect(withColumn.length).toBeGreaterThanOrEqual(4);
+    for (const t of withColumn) expect(triggers).toContain(`${t}_stamp`);
   });
 });

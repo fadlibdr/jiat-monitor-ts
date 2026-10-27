@@ -24,6 +24,16 @@ export interface TenantCtx {
 }
 
 /**
+ * Site scope of a membership (HLD §2), for TenantCtx.siteIds. site_staff see only the sites assigned
+ * to them — none until assigned. Other roles see every site unless an explicit list was set.
+ * Used by the HTTP membership middleware and by Telegram corrections, so both apply one rule.
+ */
+export function siteScopeFor(role: string, siteIds: number[] | null): number[] | null {
+  if (role === 'site_staff') return siteIds ?? [];
+  return siteIds;
+}
+
+/**
  * Runs `fn` in a transaction as the restricted app role with app.company_id set.
  * Every query inside sees only that company's rows and can only write rows of that company —
  * enforced by Postgres, so a forgotten filter, a queue job, or a raw SQL string cannot leak.

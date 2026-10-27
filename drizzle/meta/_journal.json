@@ -15,6 +15,20 @@
       "when": 1793103288828,
       "tag": "0001_phase1_access_contracts_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793106593026,
+      "tag": "0002_phase2_intake",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793113999851,
+      "tag": "0003_jobs_serial_key",
+      "breakpoints": true
     }
   ]
 }

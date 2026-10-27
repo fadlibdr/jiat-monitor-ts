@@ -1,0 +1,2 @@
+ALTER TABLE "jobs" ADD COLUMN "serial_key" text;--> statement-breakpoint
+CREATE INDEX "jobs_serial_open" ON "jobs" USING btree ("serial_key","id") WHERE serial_key IS NOT NULL AND done_at IS NULL AND failed_at IS NULL;

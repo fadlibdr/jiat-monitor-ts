@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, bigserial, boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, varchar,
+  bigint, bigserial, boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, uuid, varchar,
 } from 'drizzle-orm/pg-core';
 import { CATEGORIES } from '../domain/categories.js';
 
@@ -233,6 +233,177 @@ export const boqSchedules = pgTable('boq_schedules', {
   ...timestamps,
 }, (t) => [uniqueIndex('boq_schedules_item_period').on(t.boqItemId, t.period)]);
 
+// ---------------------------------------------------------------------------------------------
+// Phase 2 — intake (LLD §2, §5–7)
+// ---------------------------------------------------------------------------------------------
+
+export const VENDOR_STATUSES = ['active', 'draft'] as const;
+/** Master vendor per company (HLD §7). `draft` = created from a chat VENDOR correction, to be reviewed. */
+export const vendors = pgTable('vendors', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  name: text('name').notNull(),
+  npwp: varchar('npwp', { length: 16 }),
+  bankName: text('bank_name'),
+  bankAccount: varchar('bank_account', { length: 40 }),
+  phone: varchar('phone', { length: 30 }),
+  defaultCategory: varchar('default_category', { length: 20 }).$type<(typeof CATEGORIES)[number]>(),
+  status: varchar('status', { length: 10 }).notNull().default('active').$type<(typeof VENDOR_STATUSES)[number]>(),
+  ...authorship,
+  ...timestamps,
+}, (t) => [uniqueIndex('vendors_company_name').on(t.companyId, t.name)]);
+
+/**
+ * Telegram group → company + site (HLD §2: maintained by the system admin). Configuration, not tenant
+ * data: the webhook must resolve the company *before* it has a company context, so no RLS here.
+ */
+export const telegramChats = pgTable('telegram_chats', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  chatId: bigint('chat_id', { mode: 'number' }).notNull().unique(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  title: text('title'),
+  isActive: boolean('is_active').notNull().default(true),
+  ...timestamps,
+});
+
+export const INTAKE_KINDS = ['photo', 'correction'] as const;
+export const INTAKE_OUTCOMES = [
+  'pending', 'tersimpan', 'tersimpan_tanpa_balasan', 'duplikat', 'tidak_terbaca', 'ocr_error', 'gagal',
+  'koreksi_ok', 'koreksi_ditolak', 'diabaikan',
+] as const;
+export type IntakeOutcome = (typeof INTAKE_OUTCOMES)[number];
+
+/**
+ * One row per Telegram message the bot acts on. unique(chat_id, message_id) makes the webhook
+ * idempotent: Telegram's re-delivery of the same update cannot create a second job (LLD §5).
+ */
+export const intakeEvents = pgTable('intake_events', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+  messageId: bigint('message_id', { mode: 'number' }).notNull(),
+  /** Telegram `from.id` (not users.id) */
+  fromUserId: bigint('from_user_id', { mode: 'number' }),
+  kind: varchar('kind', { length: 12 }).notNull().$type<(typeof INTAKE_KINDS)[number]>(),
+  /** photo: {fileId, mime}; correction: {text, replyToMessageId} — never the whole update */
+  payload: jsonb('payload').notNull(),
+  outcome: varchar('outcome', { length: 30 }).notNull().default('pending').$type<IntakeOutcome>(),
+  vendorInvoiceId: bigint('vendor_invoice_id', { mode: 'number' }),
+  /** message id of the bot's reply, so a later "reply" from staff resolves to this row */
+  replyMessageId: bigint('reply_message_id', { mode: 'number' }),
+  error: text('error'),
+  ...timestamps,
+}, (t) => [
+  uniqueIndex('intake_events_chat_message').on(t.chatId, t.messageId),
+  index('intake_events_chat_reply').on(t.chatId, t.replyMessageId),
+  index('intake_events_company_created').on(t.companyId, t.createdAt),
+]);
+
+/** Original files, never cropped or overwritten (HLD §8). sha256 unique per company = V8. */
+export const attachments = pgTable('attachments', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  /** for the V9 near-duplicate window (same site); null for files not tied to a site */
+  siteId: bigint('site_id', { mode: 'number' }).references(() => sites.id),
+  attachableType: varchar('attachable_type', { length: 40 }).notNull(),
+  attachableId: bigint('attachable_id', { mode: 'number' }).notNull(),
+  path: text('path').notNull(),
+  mime: varchar('mime', { length: 100 }).notNull(),
+  size: integer('size').notNull(),
+  sha256: varchar('sha256', { length: 64 }).notNull(),
+  phash: varchar('phash', { length: 16 }),
+  telegramFileId: text('telegram_file_id'),
+  telegramMessageId: bigint('telegram_message_id', { mode: 'number' }),
+  ...authorship,
+  ...timestamps,
+}, (t) => [
+  uniqueIndex('attachments_company_sha256').on(t.companyId, t.sha256),
+  index('attachments_attachable').on(t.attachableType, t.attachableId),
+  index('attachments_site_created').on(t.siteId, t.createdAt),
+]);
+
+export const VENDOR_INVOICE_STATUSES = ['perlu_konfirmasi', 'perlu_cek', 'terkonfirmasi', 'ditolak'] as const;
+export type VendorInvoiceStatus = (typeof VENDOR_INVOICE_STATUSES)[number];
+
+/**
+ * Supplier receipts/invoices (nota, faktur, kwitansi). From Telegram intake or entered manually.
+ * row_id is the public reference used in chat (#last-4-hex) and in PATCH /intake/:rowId; the
+ * internal id never leaves the API (LLD §2).
+ */
+export const vendorInvoices = pgTable('vendor_invoices', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  rowId: uuid('row_id').notNull().defaultRandom().unique(),
+  vendorId: bigint('vendor_id', { mode: 'number' }).references(() => vendors.id),
+  /** vendor name as read by OCR / typed in chat, kept even after vendor_id is matched */
+  vendorName: text('vendor_name'),
+  npwp: varchar('npwp', { length: 16 }),
+  invoiceDate: date('invoice_date'),
+  docNumber: varchar('doc_number', { length: 100 }),
+  description: text('description'),
+  category: varchar('category', { length: 20 }).$type<(typeof CATEGORIES)[number]>(),
+  dppCents: bigint('dpp_cents', { mode: 'number' }),
+  ppnCents: bigint('ppn_cents', { mode: 'number' }),
+  totalCents: bigint('total_cents', { mode: 'number' }).notNull(),
+  dueDate: date('due_date'),
+  status: varchar('status', { length: 20 }).notNull().$type<VendorInvoiceStatus>(),
+  source: varchar('source', { length: 10 }).notNull().$type<'telegram' | 'manual'>(),
+  imageHash: varchar('image_hash', { length: 64 }),
+  phash: varchar('phash', { length: 16 }),
+  /** per-field OCR confidence, validation flags, missing fields, near-duplicate candidates */
+  confidence: jsonb('confidence').$type<IntakeReview>().notNull().default(sql`'{}'::jsonb`),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+  confirmedBy: bigint('confirmed_by', { mode: 'number' }),
+  ...authorship,
+  ...timestamps,
+}, (t) => [
+  uniqueIndex('vendor_invoices_company_image').on(t.companyId, t.imageHash),
+  // second fence (LLD §6): one confirmed invoice per vendor/date/total. Partial instead of DEFERRABLE:
+  // it binds exactly when a row is confirmed, and rows with an unknown vendor are not affected.
+  uniqueIndex('vendor_invoices_confirmed_unique').on(t.companyId, t.vendorId, t.invoiceDate, t.totalCents)
+    .where(sql`status = 'terkonfirmasi'`),
+  index('vendor_invoices_company_status').on(t.companyId, t.status),
+  index('vendor_invoices_site').on(t.siteId),
+]);
+
+export interface IntakeReview {
+  fields?: Record<string, number>;
+  flags?: string[];
+  missing?: string[];
+  nearDuplicates?: Array<{ rowId: string; distance: number }>;
+  /** what OCR read for subtotal/ppn/line items, so a TOTAL correction can re-run V4/V5 */
+  extracted?: { subtotalCents: number | null; ppnCents: number | null; itemsCents: number | null };
+}
+
+/**
+ * Background jobs (LLD §9), Postgres-backed so the pilot needs no Redis. Not a tenant table: the
+ * worker claims across companies, and every job carries company_id explicitly (LLD §3); handlers
+ * run inside withCompany(job.companyId).
+ */
+export const jobs = pgTable('jobs', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  kind: varchar('kind', { length: 50 }).notNull(),
+  companyId: bigint('company_id', { mode: 'number' }).references(() => companies.id),
+  payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+  runAt: timestamp('run_at', { withTimezone: true }).notNull().defaultNow(),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  lockedAt: timestamp('locked_at', { withTimezone: true }),
+  lockedBy: text('locked_by'),
+  lastError: text('last_error'),
+  /** jobs with the same key run one at a time, in id order (e.g. corrections of one chat) */
+  serialKey: text('serial_key'),
+  doneAt: timestamp('done_at', { withTimezone: true }),
+  failedAt: timestamp('failed_at', { withTimezone: true }),
+  ...timestamps,
+}, (t) => [
+  index('jobs_due').on(t.runAt).where(sql`done_at IS NULL AND failed_at IS NULL`),
+  index('jobs_serial_open').on(t.serialKey, t.id).where(sql`serial_key IS NOT NULL AND done_at IS NULL AND failed_at IS NULL`),
+]);
+
 /**
  * Append-only. The app role has no INSERT/UPDATE/DELETE grant: rows are written only by the
  * SECURITY DEFINER trigger/function in audit.ts (data changes, chat corrections, holding access).
@@ -255,4 +426,5 @@ export const auditLogs = pgTable('audit_logs', {
 /** Every table whose rows belong to one company. rls.ts applies the policy to each. */
 export const TENANT_TABLES = [
   'sites', 'contracts', 'contract_addendums', 'contract_terms', 'boq_versions', 'boq_items', 'boq_schedules',
+  'vendors', 'intake_events', 'attachments', 'vendor_invoices',
 ] as const;

@@ -34,15 +34,21 @@ const SITE_SCOPE: Record<TenantTable, string | null> = {
   boq_versions: viaContract,
   boq_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM boq_versions v WHERE v.id = version_id))`,
   boq_schedules: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM boq_items b WHERE b.id = boq_item_id))`,
+  vendors: null, // company-wide master data
+  intake_events: `jiat_site_allowed(site_id)`,
+  attachments: `(site_id IS NULL OR jiat_site_allowed(site_id))`,
+  vendor_invoices: `jiat_site_allowed(site_id)`,
 };
 
 export function rlsStatements(): string[] {
   const out: string[] = [
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${APP_ROLE}') THEN CREATE ROLE ${APP_ROLE} NOLOGIN; END IF; END $$;`,
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${HOLDING_ROLE}') THEN CREATE ROLE ${HOLDING_ROLE} NOLOGIN; END IF; END $$;`,
+    // V10 vendor matching (similarity()); a trusted extension, so the database owner may create it
+    `CREATE EXTENSION IF NOT EXISTS pg_trgm;`,
     `GRANT USAGE ON SCHEMA public TO ${APP_ROLE}, ${HOLDING_ROLE};`,
     // non-tenant tables: app may read/write, holding may read
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications TO ${APP_ROLE};`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications, telegram_chats, jobs TO ${APP_ROLE};`,
     `GRANT SELECT ON companies, users, company_users, management_viewers TO ${HOLDING_ROLE};`,
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};`,
     `CREATE OR REPLACE FUNCTION jiat_site_unscoped() RETURNS boolean LANGUAGE sql STABLE AS $$
