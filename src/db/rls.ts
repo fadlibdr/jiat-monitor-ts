@@ -67,7 +67,7 @@ export function rlsStatements(): string[] {
     `CREATE EXTENSION IF NOT EXISTS pg_trgm;`,
     `GRANT USAGE ON SCHEMA public TO ${APP_ROLE}, ${HOLDING_ROLE};`,
     // non-tenant tables: app may read/write, holding may read
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications, telegram_chats, jobs TO ${APP_ROLE};`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications, telegram_chats, telegram_link_codes, jobs TO ${APP_ROLE};`,
     `GRANT SELECT ON companies, users, company_users, management_viewers TO ${HOLDING_ROLE};`,
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};`,
     `CREATE OR REPLACE FUNCTION jiat_site_unscoped() RETURNS boolean LANGUAGE sql STABLE AS $$

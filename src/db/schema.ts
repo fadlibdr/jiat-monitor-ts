@@ -268,6 +268,19 @@ export const telegramChats = pgTable('telegram_chats', {
   ...timestamps,
 });
 
+/**
+ * One-time codes that link a Telegram account to a user (docs/remaining-work.md §4.1): the user asks
+ * for a code in the app and sends "/start <code>" to the bot in a private chat. Only the sha256 of
+ * the code is stored; codes expire after 15 minutes and work once. Not tenant data (users are global).
+ */
+export const telegramLinkCodes = pgTable('telegram_link_codes', {
+  codeHash: varchar('code_hash', { length: 64 }).primaryKey(),
+  userId: bigint('user_id', { mode: 'number' }).notNull().references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('telegram_link_codes_user').on(t.userId)]);
+
 export const INTAKE_KINDS = ['photo', 'correction'] as const;
 export const INTAKE_OUTCOMES = [
   'pending', 'tersimpan', 'tersimpan_tanpa_balasan', 'duplikat', 'tidak_terbaca', 'ocr_error', 'gagal',

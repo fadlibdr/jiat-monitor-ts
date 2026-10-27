@@ -19,6 +19,8 @@ const Env = z.object({
   AUTH_TRUSTED_PROXIES: z.string().default(''),
   /** compared with X-Telegram-Bot-Api-Secret-Token; unset = webhook off (404) */
   TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/, 'TELEGRAM_WEBHOOK_SECRET: 32–256 karakter A-Z a-z 0-9 _ -').optional(),
+  /** the bot's @username without "@": POST /me/telegram-link then returns a t.me/<bot>?start=<code> link */
+  TELEGRAM_BOT_USERNAME: z.string().regex(/^[A-Za-z0-9_]{5,32}$/, 'TELEGRAM_BOT_USERNAME: 5–32 karakter A-Z a-z 0-9 _').optional(),
   /** folder of original intake photos (same as the worker's) */
   STORAGE_DIR: z.string().min(1).optional(),
   NODE_ENV: z.string().default('development'),
@@ -44,6 +46,7 @@ async function main(): Promise<void> {
     db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins, log,
     ...(env.STORAGE_DIR ? { storage: new LocalDiskStorage(env.STORAGE_DIR) } : {}),
     ...(env.TELEGRAM_WEBHOOK_SECRET ? { telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET } : {}),
+    ...(env.TELEGRAM_BOT_USERNAME ? { telegramBotUsername: env.TELEGRAM_BOT_USERNAME } : {}),
   });
   const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => log('api_started', { port: info.port }));
 

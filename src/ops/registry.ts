@@ -2,10 +2,11 @@ import { refreshAll } from '../dashboard/snapshot.js';
 import type { Db } from '../db/tenant.js';
 import type { ObjectStorage } from '../intake/storage.js';
 import type { TelegramApi } from '../intake/telegram-api.js';
-import type { Registry } from '../jobs/queue.js';
+import { PermanentJobError, type Registry } from '../jobs/queue.js';
 import type { Schedule } from '../jobs/schedule.js';
 import { sendAllDigests } from './digest.js';
 import { purgeOldJobs, purgeOrphanPhotos } from './purge.js';
+import { JOB_TELEGRAM_SEND } from './telegram-link.js';
 
 /**
  * Scheduled jobs of LLD §9 other than the intake. BackupDatabase is NOT here on purpose: pg_dump
@@ -28,14 +29,25 @@ export function opsSchedules(cfg: { refreshMinutes: number; digest: boolean }): 
 export interface OpsDeps {
   db: Db;
   storage: ObjectStorage;
-  /** absent → no digest (the bot token is not configured) */
-  telegram?: TelegramApi | undefined;
+  telegram: TelegramApi;
+  /** DAILY_DIGEST=1 */
+  digest: boolean;
   now: () => Date;
   log: (msg: string, meta: object) => void;
 }
 
 export function opsRegistry(deps: OpsDeps): Registry {
+  const telegram = deps.telegram;
   const registry: Registry = {
+    // replies queued by the API, which holds no bot token (e.g. the answer to "/start <code>")
+    [JOB_TELEGRAM_SEND]: {
+      run: async (job) => {
+        const { chatId, text } = job.payload as { chatId?: unknown; text?: unknown };
+        if (typeof chatId !== 'number' || typeof text !== 'string') throw new PermanentJobError('telegram.send: payload tidak valid');
+        await telegram.sendMessage(chatId, text);
+      },
+      backoffSeconds: [30, 300],
+    },
     [JOB_DASHBOARD_REFRESH]: {
       run: async () => { deps.log('dashboard_refreshed', await refreshAll(deps.db, deps.now())); },
       backoffSeconds: [60],
@@ -49,8 +61,7 @@ export function opsRegistry(deps: OpsDeps): Registry {
       backoffSeconds: [600],
     },
   };
-  const telegram = deps.telegram;
-  if (telegram) {
+  if (deps.digest) {
     registry[JOB_DAILY_DIGEST] = {
       run: async () => { deps.log('digest_done', await sendAllDigests({ db: deps.db, telegram, log: deps.log }, deps.now())); },
       backoffSeconds: [300, 900],

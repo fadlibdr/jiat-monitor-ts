@@ -25,6 +25,7 @@ import { MANAGE_ROLES, requireRole } from './context.js';
 import type { ObjectStorage } from '../intake/storage.js';
 import { errorText } from '../jobs/queue.js';
 import type { Log } from '../log.js';
+import { createLinkCode } from '../ops/telegram-link.js';
 
 export { readUpload } from './context.js';
 
@@ -42,13 +43,15 @@ export interface AppDeps {
   telegramWebhookSecret?: string;
   /** structured log (src/log.ts); absent → silent (tests) */
   log?: Log;
+  /** TELEGRAM_BOT_USERNAME: makes POST /me/telegram-link return a t.me deep link */
+  telegramBotUsername?: string;
 }
 
 const MAX_UPLOAD = 15 * 1024 * 1024;
 
 export function createApp({
   db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date(), storage, telegramWebhookSecret,
-  log = () => {},
+  log = () => {}, telegramBotUsername,
 }: AppDeps) {
   const app = new Hono<AppEnv>();
   const deps: RouteDeps = { db, maxUploadBytes, now };
@@ -91,7 +94,7 @@ export function createApp({
   app.get('/health', (c) => c.json({ ok: true }));
 
   // Telegram authenticates with its secret token, not a session (registered before the session gates)
-  registerTelegramWebhook(app, { db, secret: telegramWebhookSecret });
+  registerTelegramWebhook(app, { db, secret: telegramWebhookSecret, now });
 
   if (betterAuth) {
     if (trustedOrigins.length) app.use('/api/auth/*', cors({ origin: trustedOrigins, credentials: true }));
@@ -109,6 +112,13 @@ export function createApp({
         .where(eq(companyUsers.userId, userId)),
     );
     return c.json({ data: rows });
+  });
+
+  /** One-time code to link the caller's Telegram account: send "/start <code>" to the bot (or open `link`). */
+  app.post('/me/telegram-link', async (c) => {
+    const { code, expiresAt } = await createLinkCode(db, c.get('userId'), now());
+    const link = telegramBotUsername ? `https://t.me/${telegramBotUsername}?start=${code}` : null;
+    return c.json({ data: { code, expiresAt: expiresAt.toISOString(), link } }, 201);
   });
 
   registerAdminRoutes(app, deps);

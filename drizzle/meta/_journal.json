@@ -43,6 +43,13 @@
       "when": 1793115988036,
       "tag": "0005_ops_scheduler_digest",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793123953608,
+      "tag": "0006_telegram_link_codes",
+      "breakpoints": true
     }
   ]
 }

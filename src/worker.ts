@@ -57,7 +57,7 @@ async function main(): Promise<void> {
       config: { qualityMin: env.INTAKE_QUALITY_MIN, totalConfidenceMin: env.INTAKE_TOTAL_CONFIDENCE_MIN, maxPhotoBytes: env.INTAKE_MAX_PHOTO_MB * 1024 * 1024 },
       log,
     }),
-    ...opsRegistry({ db, storage, telegram: digest ? telegram : undefined, now, log }),
+    ...opsRegistry({ db, storage, telegram, digest, now, log }),
   };
   const schedules = opsSchedules({ refreshMinutes: env.HOLDING_MV_REFRESH_MINUTES, digest });
 
