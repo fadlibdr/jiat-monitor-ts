@@ -394,10 +394,15 @@ export const jobs = pgTable('jobs', {
   lockedAt: timestamp('locked_at', { withTimezone: true }),
   lockedBy: text('locked_by'),
   lastError: text('last_error'),
+  /** jobs with the same key run one at a time, in id order (e.g. corrections of one chat) */
+  serialKey: text('serial_key'),
   doneAt: timestamp('done_at', { withTimezone: true }),
   failedAt: timestamp('failed_at', { withTimezone: true }),
   ...timestamps,
-}, (t) => [index('jobs_due').on(t.runAt).where(sql`done_at IS NULL AND failed_at IS NULL`)]);
+}, (t) => [
+  index('jobs_due').on(t.runAt).where(sql`done_at IS NULL AND failed_at IS NULL`),
+  index('jobs_serial_open').on(t.serialKey, t.id).where(sql`serial_key IS NOT NULL AND done_at IS NULL AND failed_at IS NULL`),
+]);
 
 /**
  * Append-only. The app role has no INSERT/UPDATE/DELETE grant: rows are written only by the

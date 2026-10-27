@@ -14,6 +14,8 @@ export interface JobSpec {
   payload?: Record<string, unknown>;
   runAt?: Date;
   maxAttempts?: number;
+  /** jobs sharing a key never overtake each other, even after a retry moved run_at */
+  serialKey?: string;
 }
 
 export interface Job {
@@ -50,6 +52,7 @@ export async function enqueue(tx: Tx, spec: JobSpec): Promise<number> {
     payload: spec.payload ?? {},
     ...(spec.runAt ? { runAt: spec.runAt } : {}),
     ...(spec.maxAttempts ? { maxAttempts: spec.maxAttempts } : {}),
+    ...(spec.serialKey ? { serialKey: spec.serialKey } : {}),
   }).returning({ id: jobs.id });
   return row!.id;
 }
@@ -63,6 +66,9 @@ export async function claimNext(db: Db, workerId: string): Promise<Job | null> {
         SELECT id FROM jobs
         WHERE done_at IS NULL AND failed_at IS NULL AND run_at <= now()
           AND (locked_at IS NULL OR locked_at < now() - ${STALE_LOCK})
+          AND (serial_key IS NULL OR NOT EXISTS (
+            SELECT 1 FROM jobs e
+            WHERE e.serial_key = jobs.serial_key AND e.id < jobs.id AND e.done_at IS NULL AND e.failed_at IS NULL))
         ORDER BY run_at, id
         FOR UPDATE SKIP LOCKED
         LIMIT 1)`)
@@ -105,11 +111,11 @@ export async function runOnce(db: Db, registry: Registry, workerId: string, log:
   const job = await claimNext(db, workerId);
   if (!job) return null;
   const spec = registry[job.kind];
+  let ran = false;
   try {
     if (!spec) throw new PermanentJobError(`jenis job tidak dikenal: ${job.kind}`);
     await spec.run(job);
-    await completeJob(db, job, workerId);
-    return { jobId: job.id, kind: job.kind, result: 'done' };
+    ran = true;
   } catch (e) {
     const result = await failJob(db, job, workerId, e, spec);
     log('job_failed', { jobId: job.id, kind: job.kind, companyId: job.companyId, attempt: job.attempts, result, error: errorText(e) });
@@ -122,6 +128,10 @@ export async function runOnce(db: Db, registry: Registry, workerId: string, log:
     }
     return { jobId: job.id, kind: job.kind, result };
   }
+  // outside the try: if marking it done fails (database blip), the work is NOT a failure — the job
+  // stays locked, is taken over after the stale-lock timeout and re-runs idempotently
+  if (ran) await completeJob(db, job, workerId);
+  return { jobId: job.id, kind: job.kind, result: 'done' };
 }
 
 export interface WorkerOptions {
@@ -156,8 +166,15 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /** Longest error text kept in jobs.last_error / logs before it is cut (plus "…"). */
 export const ERROR_TEXT_MAX = 1000;
 
-/** Error text for jobs.last_error and logs: name + message, bounded. */
+/**
+ * Error text for jobs.last_error and logs: name + message, bounded. Query wrappers (Drizzle) put the
+ * SQL and its bound parameters in their own message and the database's reason in `cause`: the
+ * innermost cause is reported instead, so the log says *why* (e.g. "value too long …") and does
+ * not copy parameter values (row data) into logs.
+ */
 export function errorText(e: unknown): string {
-  const s = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  let root: unknown = e;
+  for (let depth = 0; depth < 5 && root instanceof Error && root.cause instanceof Error; depth++) root = root.cause;
+  const s = root instanceof Error ? `${root.name}: ${root.message}` : String(root);
   return s.length > ERROR_TEXT_MAX ? `${s.slice(0, ERROR_TEXT_MAX)}…` : s;
 }

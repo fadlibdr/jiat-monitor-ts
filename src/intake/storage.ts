@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { link, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 /**
@@ -22,15 +23,31 @@ export class LocalDiskStorage implements ObjectStorage {
     this.root = resolve(root);
   }
 
-  /** contentType is for object stores; on disk the extension in the key carries it. */
+  /**
+   * Atomic and never overwriting: the bytes go to a temp file (fsync'd), which is then hard-linked
+   * to the final name. A crash mid-write leaves only a temp file, never a truncated original, so an
+   * existing final file is always a complete copy — and keys are content-addressed (sha256), so it
+   * is the same photo. contentType is for object stores; on disk the key's extension carries it.
+   */
   async put(key: string, bytes: Buffer, _contentType?: string): Promise<void> {
     const path = this.path(key);
     await mkdir(dirname(path), { recursive: true });
+    const tmp = `${path}.${randomUUID()}.tmp`;
     try {
-      await writeFile(path, bytes, { flag: 'wx' }); // never overwrite an original
-    } catch (e) {
-      // keys are content-addressed (sha256): an existing file is the same photo from an earlier attempt
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      const fh = await open(tmp, 'wx');
+      try {
+        await fh.writeFile(bytes);
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      try {
+        await link(tmp, path);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      }
+    } finally {
+      await rm(tmp, { force: true });
     }
   }
 

@@ -49,7 +49,8 @@ export function registerTelegramWebhook(app: App, { db, secret }: { db: Db; secr
       if (!ev) return; // Telegram re-delivery: already recorded and queued
       await enqueue(tx, msg.kind === 'photo'
         ? { kind: JOB_PHOTO, companyId: chat.companyId, payload: { intakeEventId: ev.id }, maxAttempts: PHOTO_MAX_ATTEMPTS }
-        : { kind: JOB_CORRECTION, companyId: chat.companyId, payload: { intakeEventId: ev.id }, maxAttempts: CORRECTION_MAX_ATTEMPTS });
+        // corrections of one chat in arrival order: "TOTAL …" then "OK" must not be swapped by a retry
+        : { kind: JOB_CORRECTION, companyId: chat.companyId, payload: { intakeEventId: ev.id }, maxAttempts: CORRECTION_MAX_ATTEMPTS, serialKey: `chat:${msg.chatId}` });
     });
     return c.body(null, 200);
   });

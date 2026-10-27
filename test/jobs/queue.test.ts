@@ -107,6 +107,39 @@ describe('runOnce: retry, give up, permanent errors', () => {
   });
 });
 
+describe('serial keys (corrections of one chat stay in order)', () => {
+  it('jobs without a key, and a single keyed job, are claimed normally', async () => {
+    const plain = await withApp(db, (tx) => enqueue(tx, { kind: 'k', companyId: A }));
+    const keyed = await withApp(db, (tx) => enqueue(tx, { kind: 'k', companyId: A, serialKey: 'chat:-9' }));
+    expect((await claimNext(db, 'w'))!.id).toBe(plain);
+    expect((await claimNext(db, 'w'))!.id).toBe(keyed);
+  });
+
+  it('a job waits for every earlier open job with the same key, even when it is due first', async () => {
+    const order: number[] = [];
+    let failFirst = true;
+    const registry: Registry = {
+      c: {
+        run: async (job) => {
+          if (job.payload['n'] === 1 && failFirst) { failFirst = false; throw new Error('transient'); }
+          order.push(job.payload['n'] as number);
+        },
+        backoffSeconds: [60],
+      },
+    };
+    await withApp(db, (tx) => enqueue(tx, { kind: 'c', companyId: A, payload: { n: 1 }, serialKey: 'chat:-1' }));
+    await withApp(db, (tx) => enqueue(tx, { kind: 'c', companyId: A, payload: { n: 2 }, serialKey: 'chat:-1' }));
+    await withApp(db, (tx) => enqueue(tx, { kind: 'c', companyId: A, payload: { n: 3 }, serialKey: 'chat:-2' }));
+    expect(await runOnce(db, registry, 'w')).toMatchObject({ result: 'retry' }); // n=1 pushed back 60 s
+    expect(await runOnce(db, registry, 'w')).toMatchObject({ result: 'done' }); // n=3: another chat, free to run
+    expect(await runOnce(db, registry, 'w')).toBeNull(); // n=2 is due but waits behind n=1
+    await makeDue();
+    await runOnce(db, registry, 'w');
+    await runOnce(db, registry, 'w');
+    expect(order).toEqual([3, 1, 2]);
+  });
+});
+
 describe('runWorker', () => {
   it('drains due jobs and stops when aborted', async () => {
     const done: number[] = [];
@@ -127,5 +160,11 @@ describe('errorText', () => {
     expect(errorText(new Error('boom'))).toBe('Error: boom');
     expect(errorText('')).toBe('');
     expect(errorText(null)).toBe('null');
+  });
+
+  it('reports the innermost cause (the database reason), not the wrapper with SQL and parameters', () => {
+    const pg = new Error('value too long for type character varying(100)');
+    const wrapped = new Error('Failed query: insert into "vendor_invoices" … params: 12345,secret', { cause: pg });
+    expect(errorText(wrapped)).toBe('Error: value too long for type character varying(100)');
   });
 });

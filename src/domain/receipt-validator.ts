@@ -182,10 +182,11 @@ export function validateReceipt(
     npwp,
     missing,
     fields: {
-      vendorName,
-      docNumber: text(s2.doc_number) ?? text(s2.invoice_number),
+      vendorName: vendorName === null ? null : vendorName.slice(0, TEXT_MAX.vendorName),
+      // a nota number longer than the column is not a number we could trust: dropped, not cut
+      docNumber: boundedOrNull(text(s2.doc_number) ?? text(s2.invoice_number), TEXT_MAX.docNumber),
       invoiceDate,
-      description: text(s2.description),
+      description: text(s2.description)?.slice(0, TEXT_MAX.description) ?? null,
       subtotalCents: subtotal,
       ppnCents: ppn,
       totalCents,
@@ -193,6 +194,16 @@ export function validateReceipt(
       confidence,
     },
   };
+}
+
+/**
+ * Bounds on OCR text (model output is untrusted): vendor_invoices.doc_number is varchar(100); a
+ * value too long for its column would fail the same way on every retry.
+ */
+export const TEXT_MAX = { vendorName: 200, docNumber: 100, description: 2000 } as const;
+
+function boundedOrNull(s: string | null, max: number): string | null {
+  return s !== null && s.length <= max ? s : null;
 }
 
 /** Flags that need a human before the row may be confirmed. npwp_format alone does not. */

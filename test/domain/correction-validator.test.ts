@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseCorrection } from '../../src/domain/correction.js';
 import {
-  arithPpnFails, BLOCKING_FLAGS, checkStage1, dateOutOfRange, moneyCents, validateReceipt,
+  arithPpnFails, BLOCKING_FLAGS, checkStage1, dateOutOfRange, moneyCents, TEXT_MAX, validateReceipt,
 } from '../../src/domain/receipt-validator.js';
 
 describe('parseCorrection', () => {
@@ -171,6 +171,18 @@ describe('OCR output contract (LLD §6 shape and text shape both accepted)', () 
       .toMatchObject({ status: 'perlu_cek', flags: ['field_kosong'], missing: ['invoice_date'] });
     const r = validateReceipt({ doc_type: 'nota', quality: 0.9 }, { ...good(), invoice_date: f('21/06/2026') }, siteStart, today);
     expect(r).toMatchObject({ flags: [], fields: { invoiceDate: '2026-06-21' } });
+  });
+
+  it('bounds untrusted OCR text: a nota number over 100 chars is dropped (not cut), vendor name and description are cut', () => {
+    const r = validateReceipt({ doc_type: 'nota', quality: 0.9 }, {
+      ...good(), invoice_number: f('X'.repeat(TEXT_MAX.docNumber + 1)), vendor_name: f('V'.repeat(500)), description: f('d'.repeat(5000)),
+    }, siteStart, today);
+    if (r.decision !== 'accept') throw new Error('unreachable');
+    expect(r.fields.docNumber).toBeNull();
+    expect(r.fields.vendorName).toHaveLength(TEXT_MAX.vendorName);
+    expect(r.fields.description).toHaveLength(TEXT_MAX.description);
+    const exact = validateReceipt({ doc_type: 'nota', quality: 0.9 }, { ...good(), invoice_number: f('X'.repeat(TEXT_MAX.docNumber)) }, siteStart, today);
+    expect(exact.decision === 'accept' && exact.fields.docNumber).toHaveLength(TEXT_MAX.docNumber);
   });
 
   it('npwp_format alone does not block confirmation', () => {

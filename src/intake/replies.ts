@@ -65,7 +65,8 @@ export function correctionReply(r: ReplyRow, what: string): string {
 }
 
 export const REPLY = {
-  failure: 'Sistem sedang gangguan; foto ini akan dicoba lagi. Tidak perlu kirim ulang.',
+  /** sent only once every retry is used up: nothing will retry it, so ask for a resend */
+  failure: 'Sistem sedang gangguan; foto ini belum tercatat. Mohon kirim ulang foto ini beberapa saat lagi.',
   correctionFailed: 'Koreksi gagal diproses, hubungi admin.',
   alreadyConfirmed: 'Nota ini sudah dikonfirmasi; ubah lewat admin.',
   ambiguousRef: 'Kode # tidak ditemukan atau lebih dari satu nota cocok. Balas langsung ke pesan ringkasan nota.',
