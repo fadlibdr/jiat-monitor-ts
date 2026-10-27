@@ -240,7 +240,8 @@ function isUniqueViolation(err: unknown): boolean {
   return code === '23505';
 }
 
-async function readUpload(c: Context, max: number): Promise<{ bytes: Buffer; name: string | undefined }> {
+/** Exported for tests. Errors other than HTTPException propagate to onError (generic 500). */
+export async function readUpload(c: Context, max: number): Promise<{ bytes: Buffer; name: string | undefined }> {
   const len = Number(c.req.header('content-length') ?? 0);
   if (len > max) throw new HTTPException(413, { message: `Berkas melebihi ${Math.round(max / 1024 / 1024)} MB.` });
   let body: FormData;

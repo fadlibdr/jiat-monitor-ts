@@ -44,7 +44,7 @@ src/db/            schema (Drizzle), rls (DDL policy), tenant (withCompany / wit
 src/auth/          Authenticator interface; better-auth.ts (produksi); headerAuthenticator (test saja, menolak production)
 src/http/          Hono app: /api/auth/*, /health, /me, /companies (+ members, sites, contracts, boq)
 src/cli/           create-user.ts
-test/              133 test (unit domain, parser, importer & RLS tenancy di PGlite, auth + CRUD + BOQ HTTP end-to-end)
+test/              144 test (unit domain, parser, importer & RLS tenancy di PGlite, auth + CRUD + BOQ HTTP end-to-end)
 ```
 
 ## Menjalankan
