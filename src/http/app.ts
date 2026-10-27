@@ -12,8 +12,12 @@ import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCompanyRoutes } from './routes/company.js';
 import { registerHoldingRoutes } from './routes/holding.js';
+import { registerIntakeRoutes } from './routes/intake.js';
 import { registerMemberRoutes } from './routes/members.js';
+import { registerTelegramWebhook } from './routes/telegram.js';
+import { registerVendorRoutes } from './routes/vendors.js';
 import { MANAGE_ROLES, requireRole } from './context.js';
+import type { ObjectStorage } from '../intake/storage.js';
 
 export { readUpload } from './context.js';
 
@@ -25,11 +29,17 @@ export interface AppDeps {
   trustedOrigins?: string[];
   maxUploadBytes?: number;
   now?: () => Date;
+  /** where intake photos are read from (review screen); absent → photo route answers 503 */
+  storage?: ObjectStorage;
+  /** TELEGRAM_WEBHOOK_SECRET; absent → the webhook route answers 404 */
+  telegramWebhookSecret?: string;
 }
 
 const MAX_UPLOAD = 15 * 1024 * 1024;
 
-export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date() }: AppDeps) {
+export function createApp({
+  db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date(), storage, telegramWebhookSecret,
+}: AppDeps) {
   const app = new Hono<AppEnv>();
   const deps: RouteDeps = { db, maxUploadBytes, now };
 
@@ -49,6 +59,9 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
   });
 
   app.get('/health', (c) => c.json({ ok: true }));
+
+  // Telegram authenticates with its secret token, not a session (registered before the session gates)
+  registerTelegramWebhook(app, { db, secret: telegramWebhookSecret });
 
   if (betterAuth) {
     if (trustedOrigins.length) app.use('/api/auth/*', cors({ origin: trustedOrigins, credentials: true }));
@@ -89,6 +102,8 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
 
   registerMemberRoutes(app, '/companies/:companyId/members', deps, { canRead: async (_c, next) => { await next(); }, canWrite: requireRole(MANAGE_ROLES) });
   registerCompanyRoutes(app, deps);
+  registerVendorRoutes(app, deps);
+  registerIntakeRoutes(app, deps, storage);
 
   return app;
 }
