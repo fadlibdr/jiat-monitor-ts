@@ -2,6 +2,7 @@ import { and, eq, ne } from 'drizzle-orm';
 import type { Category } from '../domain/categories.js';
 import type { Cents } from '../domain/money.js';
 import { arithPpnFails, dateOutOfRange } from '../domain/receipt-validator.js';
+import { usableVendorName } from '../domain/vendor-name.js';
 import { sites, vendorInvoices, vendors, type IntakeReview, type VendorInvoiceStatus } from '../db/schema.js';
 import type { Tx } from '../db/tenant.js';
 import { vendorForName } from './vendors.js';
@@ -25,7 +26,11 @@ export type Channel = 'chat' | 'admin';
 export type VendorInvoiceRow = typeof vendorInvoices.$inferSelect;
 export type ApplyResult =
   | { ok: true; row: VendorInvoiceRow }
-  | { ok: false; reason: 'not_found' | 'closed' | 'confirm_blocked' | 'duplicate_confirmed'; row?: VendorInvoiceRow; flags?: string[] };
+  | {
+    ok: false;
+    reason: 'not_found' | 'vendor_not_found' | 'closed' | 'confirm_blocked' | 'duplicate_confirmed' | 'invalid_value';
+    row?: VendorInvoiceRow; flags?: string[]; detail?: string;
+  };
 
 /** Flags that send a row to perlu_cek (a human has to look). */
 export const REVIEW_FLAGS = ['field_kosong', 'arith_items', 'arith_ppn', 'date_range', 'near_duplicate'] as const;
@@ -58,7 +63,8 @@ export interface FlagInput {
 /** Re-derives the flags a correction can change (V3, V5, V7, category); keeps the sticky ones. */
 export function recomputeFlags(row: FlagInput, previous: readonly string[], siteStart: Date | null, today: Date): string[] {
   const out = new Set(previous.filter((f) => STICKY.includes(f)));
-  if ((!row.vendorId && !row.vendorName) || !row.invoiceDate) out.add('field_kosong');
+  // a name like "-" or "A" is no vendor: it could never be confirmed against a master vendor
+  if ((!row.vendorId && !usableVendorName(row.vendorName)) || !row.invoiceDate) out.add('field_kosong');
   if (arithPpnFails(row.dppCents, row.ppnCents, row.totalCents)) out.add('arith_ppn');
   if (row.invoiceDate && dateOutOfRange(row.invoiceDate, siteStart, today)) out.add('date_range');
   if (!row.category) out.add('kategori_kosong');
@@ -108,7 +114,9 @@ async function applyInSavepoint(
       case 'invoiceDate': next.invoiceDate = ch.value; break;
       case 'docNumber': next.docNumber = ch.value; break;
       case 'vendorName': {
-        const v = await vendorForName(tx, current.companyId, ch.value);
+        const name = usableVendorName(ch.value);
+        if (!name) throw new Refused({ ok: false, reason: 'invalid_value', detail: 'nama vendor tidak valid', row: current });
+        const v = await vendorForName(tx, current.companyId, name);
         next.vendorId = v.id;
         next.vendorName = v.name;
         next.category ??= v.defaultCategory;
@@ -116,7 +124,8 @@ async function applyInSavepoint(
       }
       case 'vendorId': {
         const [v] = await tx.select({ id: vendors.id, name: vendors.name, defaultCategory: vendors.defaultCategory }).from(vendors).where(eq(vendors.id, ch.value));
-        if (!v) throw new Refused({ ok: false, reason: 'not_found' });
+        // a vendor of another company is invisible (RLS) and answered the same as a missing one
+        if (!v) throw new Refused({ ok: false, reason: 'vendor_not_found', row: current });
         next.vendorId = v.id;
         next.vendorName = v.name;
         next.category ??= v.defaultCategory;
@@ -139,8 +148,11 @@ async function applyInSavepoint(
     const blocking = flags.filter((f) => CONFIRM_BLOCKERS[ctx.channel].includes(f));
     if (blocking.length) throw new Refused({ ok: false, reason: 'confirm_blocked', flags: blocking, row: current });
     // a confirmed invoice always points at a master vendor, so reports and the fence below work
-    if (!next.vendorId && next.vendorName) {
-      const v = await vendorForName(tx, current.companyId, next.vendorName);
+    // (an unusable name is already field_kosong above, so it never reaches vendorForName)
+    if (!next.vendorId) {
+      const name = usableVendorName(next.vendorName);
+      if (!name) throw new Refused({ ok: false, reason: 'confirm_blocked', flags: ['field_kosong'], row: current });
+      const v = await vendorForName(tx, current.companyId, name);
       next.vendorId = v.id;
       next.vendorName = v.name;
     }

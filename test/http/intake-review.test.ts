@@ -683,22 +683,35 @@ describe('vendors API: bank account and NPWP only for finance and managers', () 
     expect(b).not.toContain(vSinar);
   });
 
-  it('a vendor created by project_admin stores the bank data but does not echo it back to them', async () => {
-    const res = await app.request(`/companies/${A}/vendors`, send(pa, 'POST', {
-      name: 'PT Beton Prima', npwp: '1234567890123456', bankName: 'Mandiri', bankAccount: '987654321', defaultCategory: 'material',
-    }));
+  it('project_admin may not write bank data or NPWP it cannot see (403, nothing written); without them the vendor is created', async () => {
+    const pii = { npwp: '1234567890123456', bankName: 'Mandiri', bankAccount: '987654321' };
+    for (const [field, value] of Object.entries(pii)) {
+      const res = await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: 'PT Beton Prima', [field]: value }));
+      expect(res.status, field).toBe(403);
+    }
+    expect((await list(fin)).rows.some((r) => r.name === 'PT Beton Prima')).toBe(false);
+    const res = await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: 'PT Beton Prima', defaultCategory: 'material' }));
     expect(res.status).toBe(201);
-    const created = await data<VendorApi>(res);
-    expect(created).toMatchObject({ name: 'PT Beton Prima', npwp: null, bankName: null, bankAccount: null, status: 'active' });
-    const seenByFinance = (await list(fin)).rows.find((r) => r.id === created.id)!;
-    expect(seenByFinance).toMatchObject({ npwp: '1234567890123456', bankName: 'Mandiri', bankAccount: '987654321' });
+    expect(await data<VendorApi>(res)).toMatchObject({ name: 'PT Beton Prima', npwp: null, bankAccount: null, status: 'active' });
   });
 
-  it('PATCH by project_admin answers without the bank data; finance sees the change', async () => {
-    const res = await app.request(`/companies/${A}/vendors/${vAlat}`, send(pa, 'PATCH', { bankAccount: '555-000-111', bankName: 'BNI' }));
+  it('PATCH of bank data: project_admin 403 and unchanged; finance may correct it and sees the change', async () => {
+    const before = (await list(fin)).rows.find((r) => r.id === vAlat)!;
+    expect((await app.request(`/companies/${A}/vendors/${vAlat}`, send(pa, 'PATCH', { bankAccount: '555-000-111', bankName: 'BNI' }))).status).toBe(403);
+    expect((await list(fin)).rows.find((r) => r.id === vAlat)).toMatchObject({ bankAccount: before.bankAccount, bankName: before.bankName });
+    const res = await app.request(`/companies/${A}/vendors/${vAlat}`, send(fin, 'PATCH', { bankAccount: '555-000-111', bankName: 'BNI' }));
     expect(res.status).toBe(200);
-    expect(await data<VendorApi>(res)).toMatchObject({ bankAccount: null, bankName: null });
-    expect((await list(fin)).rows.find((r) => r.id === vAlat)).toMatchObject({ bankAccount: '555-000-111', bankName: 'BNI' });
+    expect(await data<VendorApi>(res)).toMatchObject({ bankAccount: '555-000-111', bankName: 'BNI' });
+    // project_admin still manages the non-sensitive fields
+    expect((await app.request(`/companies/${A}/vendors/${vAlat}`, send(pa, 'PATCH', { phone: '0812 3456 789' }))).status).toBe(200);
+  });
+
+  it('names are trimmed and collapsed like vendorForName; blank names 400; a 31-character phone 400', async () => {
+    expect((await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: '   ' }))).status).toBe(400);
+    expect((await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: ' Toko  Sinar   Jaya ' }))).status).toBe(409);
+    expect((await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: 'Toko Telepon', phone: `+${'1'.repeat(30)}` }))).status).toBe(400);
+    const ok = await app.request(`/companies/${A}/vendors`, send(pa, 'POST', { name: 'Toko Telepon', phone: `+${'1'.repeat(29)}` }));
+    expect(ok.status).toBe(201);
   });
 
   it('invalid NPWP / bank account, duplicate name → 400/409; site_staff cannot create (403)', async () => {

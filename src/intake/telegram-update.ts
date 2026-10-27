@@ -25,6 +25,9 @@ export type IncomingMessage =
   | { kind: 'text'; chatId: number; messageId: number; fromId: number | null; text: string; replyToMessageId: number | null; replyToBot: boolean };
 
 const IMAGE_MIME = /^image\/(jpeg|png|webp)$/;
+/** C0 controls except tab, line feed and carriage return, and DEL */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 /**
  * Update → what the intake should act on, or null (edited messages, stickers, joins, bots…).
@@ -45,9 +48,12 @@ export function classifyUpdate(raw: unknown): IncomingMessage | null {
   if (m.document && IMAGE_MIME.test(m.document.mime_type ?? '')) {
     return { kind: 'photo', ...base, fileId: m.document.file_id, mime: m.document.mime_type!, fileSize: m.document.file_size ?? null };
   }
-  if (m.text?.trim()) {
+  // control characters (NUL above all: Postgres jsonb/text refuse \u0000) would make the webhook
+  // fail, and Telegram re-sends a failed update forever; they carry no meaning in a correction
+  const text = m.text?.replace(CONTROL_CHARS, '');
+  if (text?.trim()) {
     return {
-      kind: 'text', ...base, text: m.text,
+      kind: 'text', ...base, text,
       replyToMessageId: m.reply_to_message?.message_id ?? null,
       replyToBot: m.reply_to_message?.from?.is_bot === true,
     };

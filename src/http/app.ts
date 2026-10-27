@@ -18,6 +18,7 @@ import { registerTelegramWebhook } from './routes/telegram.js';
 import { registerVendorRoutes } from './routes/vendors.js';
 import { MANAGE_ROLES, requireRole } from './context.js';
 import type { ObjectStorage } from '../intake/storage.js';
+import { errorText } from '../jobs/queue.js';
 
 export { readUpload } from './context.js';
 
@@ -53,8 +54,13 @@ export function createApp({
       case '23503': return c.json({ error: 'conflict', message: 'Data masih dirujuk oleh data lain.' }, 409);
       // RLS WITH CHECK: e.g. writing a row for a site outside the caller's scope
       case '42501': return c.json({ error: 'forbidden', message: 'Akses ditolak oleh kebijakan data.' }, 403);
+      // a value the column cannot hold (too long, bad encoding/NUL, not a number): the request, not the server
+      case '22001': case '22021': case '22P02': case '22003':
+        return c.json({ error: 'invalid_request', message: 'Nilai tidak valid atau terlalu panjang.' }, 400);
     }
-    console.error('unhandled', err);
+    // errorText: the database's reason, never Drizzle's SQL + bound parameters (row data such as a
+    // vendor's bank account must not reach the logs, LLD §9)
+    console.error(JSON.stringify({ time: new Date().toISOString(), level: 'error', msg: 'unhandled', method: c.req.method, path: c.req.path, code: pgCode(err) ?? null, error: errorText(err) }));
     return c.json({ error: 'internal', message: 'Terjadi kesalahan pada server.' }, 500);
   });
 

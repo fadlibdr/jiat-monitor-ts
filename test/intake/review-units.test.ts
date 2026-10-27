@@ -772,16 +772,31 @@ describe('against PGlite (RLS)', () => {
         expect(out).toMatchObject({ vendorId: vA['CV Sumber Rejeki'], vendorName: 'CV Sumber Rejeki', category: 'operasional' });
       });
 
-      it('admin vendorId of another company is not_found through RLS and changes nothing', async () => {
+      it('admin vendorId of another company is vendor_not_found through RLS and changes nothing', async () => {
         const row = await seedRow({ vendorName: 'Abadi Teknik', category: null, flags: ['kategori_kosong'] });
         const r = await apply(row.rowId, [{ field: 'vendorId', value: vB['Abadi Teknik']! }, { field: 'docNumber', value: 'X-1' }], { channel: 'admin' });
-        expect(r).toEqual({ ok: false, reason: 'not_found' });
+        expect(r).toMatchObject({ ok: false, reason: 'vendor_not_found' });
         expect(await load(row.rowId)).toMatchObject({ vendorId: null, vendorName: 'Abadi Teknik', category: null, docNumber: null });
       });
 
-      it('admin vendorId that does not exist at all is not_found', async () => {
+      it('admin vendorId that does not exist at all is vendor_not_found (same answer as another company\'s)', async () => {
         const row = await seedRow();
-        expect(await apply(row.rowId, [{ field: 'vendorId', value: 9_999_999 }], { channel: 'admin' })).toEqual({ ok: false, reason: 'not_found' });
+        expect(await apply(row.rowId, [{ field: 'vendorId', value: 9_999_999 }], { channel: 'admin' })).toMatchObject({ ok: false, reason: 'vendor_not_found' });
+      });
+
+      it('an unusable vendor name ("-", "A", spaces) is invalid_value and changes nothing', async () => {
+        const row = await seedRow({ vendorName: 'Toko Lama', category: null });
+        for (const name of ['-', 'A', '  ', '..']) {
+          expect(await apply(row.rowId, [{ field: 'vendorName', value: name }], { channel: 'admin' })).toMatchObject({ ok: false, reason: 'invalid_value' });
+        }
+        expect(await load(row.rowId)).toMatchObject({ vendorName: 'Toko Lama', vendorId: null });
+      });
+
+      it('OCR vendor "-" is field_kosong: OK is confirm_blocked in chat and on the review screen, never a crash', async () => {
+        const row = await seedRow({ vendorName: '-', category: 'material', flags: [] });
+        for (const channel of ['chat', 'admin'] as const) {
+          expect(await apply(row.rowId, [{ field: 'status', value: 'terkonfirmasi' }], { channel })).toMatchObject({ ok: false, reason: 'confirm_blocked', flags: ['field_kosong'] });
+        }
       });
     });
 

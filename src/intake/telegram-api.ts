@@ -11,7 +11,12 @@ export interface TelegramApi {
 
 /** Transport or API failure. Never carries the bot token (it is part of every Bot API URL). */
 export class TelegramError extends Error {
-  override readonly name = 'TelegramError';
+  override readonly name: string = 'TelegramError';
+}
+
+/** The file is larger than the Bot API will serve (20 MB): retrying cannot help. */
+export class FileTooBigError extends TelegramError {
+  override readonly name = 'FileTooBigError';
 }
 
 type Fetch = typeof fetch;
@@ -27,8 +32,15 @@ export class TelegramBotApi implements TelegramApi {
   }
 
   async getFile(fileId: string) {
-    const r = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId });
-    if (!r.file_path) throw new TelegramError('getFile: file_path kosong (berkas > 20 MB atau kedaluwarsa).');
+    let r: { file_path?: string; file_size?: number };
+    try {
+      r = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId });
+    } catch (e) {
+      // "Bad Request: file is too big": the Bot API serves files up to 20 MB only — not transient
+      if (e instanceof TelegramError && /file is too big/i.test(e.message)) throw new FileTooBigError(e.message);
+      throw e;
+    }
+    if (!r.file_path) throw new FileTooBigError('getFile: file_path kosong (berkas > 20 MB).');
     return { filePath: r.file_path, fileSize: r.file_size ?? null };
   }
 

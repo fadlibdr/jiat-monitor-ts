@@ -29,9 +29,13 @@ const ALIASES: Record<string, Category> = {
   lain: 'lain', 'lain-lain': 'lain', lainnya: 'lain',
 };
 
+/** "Upah/Jasa", "upah /  jasa" → "upah / jasa": the same key whatever the spacing around "/" */
+const keyOf = (raw: string) => raw.trim().toLowerCase().replace(/\s*\/\s*/g, ' / ').replace(/\s+/g, ' ');
+// every label the bot shows (summary reply) must be accepted back by KATEGORI
+for (const [slug, label] of Object.entries(CATEGORY_LABEL) as Array<[Category, string]>) ALIASES[keyOf(label)] ??= slug;
+
 export function normalizeCategory(raw: string): Category | null {
-  const key = raw.trim().toLowerCase().replace(/\s+/g, ' ');
-  return ALIASES[key] ?? null;
+  return ALIASES[keyOf(raw)] ?? null;
 }
 
 export function isCategory(v: string): v is Category {

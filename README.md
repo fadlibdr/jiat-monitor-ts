@@ -71,7 +71,7 @@ test/              unit domain, parser, importer, RLS + lingkup site + audit di 
 
 ```bash
 npm install
-npm test            # 531 test, tanpa Postgres eksternal (PGlite)
+npm test            # 556 test, tanpa Postgres eksternal (PGlite)
 npm run typecheck
 npm run build
 

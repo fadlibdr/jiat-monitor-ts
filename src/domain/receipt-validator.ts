@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { parseIndonesianDate } from './date.js';
 import { parseIdrCents, type Cents } from './money.js';
+import { scrubVendorName, usableVendorName } from './vendor-name.js';
 
 /**
  * Validation rules V1–V7 on the two OCR stage outputs. Pure: V8–V10 (sha256, pHash window,
@@ -129,7 +130,9 @@ export function validateReceipt(
   const missing: string[] = [];
 
   const text = (f: z.infer<typeof Field> | undefined) => (f?.value == null || String(f.value).trim() === '' ? null : String(f.value).trim());
-  const vendorName = text(s2.vendor_name);
+  // shop name without an NPWP / bank account printed beside it, and only if it is a usable name
+  // ("-" or "A" counts as missing: it could never be confirmed against a master vendor)
+  const vendorName = usableVendorName(scrubVendorName(text(s2.vendor_name))?.slice(0, TEXT_MAX.vendorName));
   const rawDate = text(s2.invoice_date);
   const invoiceDate = rawDate === null ? null : parseIndonesianDate(rawDate);
 
@@ -182,7 +185,7 @@ export function validateReceipt(
     npwp,
     missing,
     fields: {
-      vendorName: vendorName === null ? null : vendorName.slice(0, TEXT_MAX.vendorName),
+      vendorName,
       // a nota number longer than the column is not a number we could trust: dropped, not cut
       docNumber: boundedOrNull(text(s2.doc_number) ?? text(s2.invoice_number), TEXT_MAX.docNumber),
       invoiceDate,
