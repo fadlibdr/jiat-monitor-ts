@@ -7,10 +7,16 @@ import type { Cents } from './money.js';
  */
 export const QTY_SCALE = 10_000;
 
-/** "12.5" / 12.5 / "12,5" → 125_000; null for negatives, more than 4 decimals or garbage. */
+/**
+ * At most 11 whole digits (99 999 999 999.9999): qty4 then stays below 10^15, inside 2^53, so every
+ * qty4 sum and comparison is exact. The numeric(18,4) column would allow 14 — no real quantity does.
+ */
+export const QTY_MAX_WHOLE_DIGITS = 11;
+
+/** "12.5" / 12.5 / "12,5" → 125_000; null for negatives, more than 4 decimals, more than 11 whole digits or garbage. */
 export function parseQty(raw: string | number): number | null {
   const s = typeof raw === 'number' ? String(raw) : raw.trim().replace(',', '.');
-  const m = /^(\d{1,14})(?:\.(\d{1,4}))?$/.exec(s);
+  const m = new RegExp(`^(\\d{1,${QTY_MAX_WHOLE_DIGITS}})(?:\\.(\\d{1,4}))?$`).exec(s);
   if (!m) return null;
   return Number(m[1]) * QTY_SCALE + Number((m[2] ?? '').padEnd(4, '0'));
 }

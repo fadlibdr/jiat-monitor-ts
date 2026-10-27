@@ -22,7 +22,10 @@ describe('mulDiv / ppnOf (exact beyond 2^53)', () => {
 });
 
 describe('termInvoiceAmounts', () => {
-  const base = { effectiveDppCents: KEEROM_DPP, ppnRateBp: 1100, retentionBp: 500, advanceCents: 1_630_000_000_00, previousDppCents: 0, previousAdvanceDeductionCents: 0, isLastTerm: false };
+  const base = {
+    effectiveDppCents: KEEROM_DPP, ppnRateBp: 1100, retentionBp: 500, advanceCents: 1_630_000_000_00,
+    previousDppCents: 0, previousAdvanceDeductionCents: 0, previousRetentionCents: 0, previousPpnCents: 0, isLastTerm: false,
+  };
 
   it('termin 30 %: DPP, proportional advance recovery, 5 % retention, PPN on DPP − advance', () => {
     const a = termInvoiceAmounts({ ...base, termPercentBp: 3000 });
@@ -35,15 +38,32 @@ describe('termInvoiceAmounts', () => {
     });
   });
 
-  it('the last termin takes the rounding rest, so Σ DPP and Σ advance recovery are exact', () => {
+  it('the last termin takes the rounding rest, so Σ DPP, Σ advance, Σ retention and Σ PPN are exact', () => {
     const thirds = [3333, 3333, 3334];
-    let prevDpp = 0; let prevAdv = 0;
+    const sum = { dpp: 0, adv: 0, ret: 0, ppn: 0 };
     const dpp = 1_000_000_01; const adv = 200_000_01;
     thirds.forEach((bp, k) => {
-      const a = termInvoiceAmounts({ ...base, effectiveDppCents: dpp, advanceCents: adv, termPercentBp: bp, previousDppCents: prevDpp, previousAdvanceDeductionCents: prevAdv, isLastTerm: k === 2 });
-      prevDpp += a.dppCents; prevAdv += a.advanceDeductionCents;
+      const a = termInvoiceAmounts({
+        ...base, effectiveDppCents: dpp, advanceCents: adv, termPercentBp: bp, isLastTerm: k === 2,
+        previousDppCents: sum.dpp, previousAdvanceDeductionCents: sum.adv, previousRetentionCents: sum.ret, previousPpnCents: sum.ppn,
+      });
+      sum.dpp += a.dppCents; sum.adv += a.advanceDeductionCents; sum.ret += a.retentionCents; sum.ppn += a.ppnCents;
     });
-    expect([prevDpp, prevAdv]).toEqual([dpp, adv]);
+    expect(sum).toEqual({ dpp, adv, ret: mulDiv(dpp, 500, 10_000), ppn: mulDiv(dpp - adv, 1100, 10_000) });
+  });
+
+  it('a 10 × 10 % schedule on an awkward DPP: retention adds up to the contract\'s, not 10 rounded pieces', () => {
+    const dpp = 1_234_567_891;
+    const sum = { dpp: 0, adv: 0, ret: 0, ppn: 0 };
+    for (let k = 0; k < 10; k++) {
+      const a = termInvoiceAmounts({
+        ...base, effectiveDppCents: dpp, advanceCents: 0, termPercentBp: 1000, isLastTerm: k === 9,
+        previousDppCents: sum.dpp, previousAdvanceDeductionCents: sum.adv, previousRetentionCents: sum.ret, previousPpnCents: sum.ppn,
+      });
+      sum.dpp += a.dppCents; sum.adv += a.advanceDeductionCents; sum.ret += a.retentionCents; sum.ppn += a.ppnCents;
+    }
+    expect(sum.ret).toBe(mulDiv(dpp, 500, 10_000));
+    expect(sum.ppn).toBe(mulDiv(dpp, 1100, 10_000));
   });
 
   it('without advance or retention, total = DPP + PPN', () => {

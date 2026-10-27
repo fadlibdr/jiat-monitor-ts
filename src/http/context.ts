@@ -31,6 +31,10 @@ export const MANAGE_ROLES: readonly CompanyRole[] = ['company_manager', 'system_
 export const EDIT_ROLES: readonly CompanyRole[] = ['project_admin', 'company_manager', 'system_admin'];
 /** Invoicing and payments (HLD §2 "Keuangan"). */
 export const FINANCE_ROLES: readonly CompanyRole[] = ['finance', 'company_manager', 'system_admin'];
+/** Approvals of PR, PO and progress (HLD §2 "Manajer perusahaan: persetujuan PO dan progres"). */
+export const APPROVE_ROLES: readonly CompanyRole[] = ['company_manager', 'system_admin'];
+/** Opname input (HLD §2 "Staf site: input opname") plus the office roles. */
+export const OPNAME_ROLES: readonly CompanyRole[] = ['site_staff', 'project_admin', 'company_manager', 'system_admin'];
 
 export const IdParam = z.coerce.number().int().positive();
 export const CompanyParams = z.object({ companyId: IdParam });
@@ -110,6 +114,19 @@ export async function readUpload(c: Context, max: number): Promise<{ bytes: Buff
   if (!(f instanceof File)) throw new HTTPException(400, { message: 'Field "file" (.xlsx) wajib ada.' });
   if (f.size > max) throw new HTTPException(413, { message: `Berkas melebihi ${Math.round(max / 1024 / 1024)} MB.` });
   return { bytes: Buffer.from(await f.arrayBuffer()), name: f.name || undefined };
+}
+
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * Optional `Idempotency-Key` header of a POST that records money or goods: the client sends one key
+ * per form submission, and a repeat (double click, retry after a timeout) returns what the first did.
+ */
+export function idempotencyKey(c: Context): string | undefined {
+  const k = c.req.header('idempotency-key');
+  if (k === undefined) return undefined;
+  if (!IDEMPOTENCY_KEY.test(k)) throw new HTTPException(400, { message: 'Idempotency-Key: 8–64 karakter A-Z a-z 0-9 _ -' });
+  return k;
 }
 
 export function notFound(message: string): never {

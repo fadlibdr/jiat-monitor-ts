@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeSCurve, MICRO_100, microToPct, pctToMicro, periodOf } from '../../src/domain/scurve.js';
+import { combineCurves, computeSCurve, MICRO_100, microToPct, pctToMicro, periodOf } from '../../src/domain/scurve.js';
 
 const pct = (p: number) => p * 1_000_000;
 /** two leaves: A carries 60 %, B 40 % of the contract */
@@ -44,6 +44,35 @@ describe('computeSCurve', () => {
   it('no plan and no actual → empty curve', () => {
     expect(computeSCurve(leaves, [], [])).toEqual([]);
     expect(computeSCurve([], [], [])).toEqual([]);
+  });
+});
+
+describe('combineCurves (portfolio, weighted by contract DPP)', () => {
+  const pt = (period: string, planned: number, actual: number | null) => ({ period, plannedMicroPct: pct(planned), actualMicroPct: actual === null ? null : pct(actual), deviationMicroPct: actual === null ? null : pct(actual - planned) });
+
+  it('weights by DPP and carries each contract forward to the union of periods', () => {
+    const combined = combineCurves([
+      { weightCents: 300, points: [pt('2026-01-01', 10, 10), pt('2026-02-01', 20, 15)] },
+      { weightCents: 100, points: [pt('2026-02-01', 40, 40)] },
+    ]);
+    // Jan: big 10/10, small has no point yet (0/0) → (3×10 + 1×0)/4 = 7.5 ; Feb: (3×20 + 40)/4 = 25 plan, (3×15 + 40)/4 = 21.25 actual
+    expect(combined).toEqual([
+      { period: '2026-01-01', plannedMicroPct: pct(7.5), actualMicroPct: pct(7.5), deviationMicroPct: 0 },
+      { period: '2026-02-01', plannedMicroPct: pct(25), actualMicroPct: pct(21.25), deviationMicroPct: pct(-3.75) },
+    ]);
+  });
+
+  it('a contract reporting late keeps its last actual; periods after every report have no actual', () => {
+    const combined = combineCurves([
+      { weightCents: 1, points: [pt('2026-01-01', 10, 10), pt('2026-02-01', 20, 20), pt('2026-03-01', 30, null)] },
+      { weightCents: 1, points: [pt('2026-01-01', 10, 5), pt('2026-02-01', 20, null)] },
+    ]);
+    expect(combined.map((p) => p.actualMicroPct)).toEqual([pct(7.5), pct(12.5), null]);
+  });
+
+  it('zero weights and empty curves are ignored; nothing left → empty', () => {
+    expect(combineCurves([{ weightCents: 0, points: [pt('2026-01-01', 10, 10)] }, { weightCents: 5, points: [] }])).toEqual([]);
+    expect(combineCurves([])).toEqual([]);
   });
 });
 

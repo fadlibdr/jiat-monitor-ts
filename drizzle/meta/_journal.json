@@ -29,6 +29,34 @@
       "when": 1793113999851,
       "tag": "0003_jobs_serial_key",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793115036761,
+      "tag": "0004_phase3_4_procurement_progress_finance_dashboards",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793115988036,
+      "tag": "0005_ops_scheduler_digest",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793123953608,
+      "tag": "0006_telegram_link_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793127678897,
+      "tag": "0007_review_fixes",
+      "breakpoints": true
     }
   ]
 }

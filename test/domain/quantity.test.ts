@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { lineAmountCents, parseQty, qtyToString, receiptStatus } from '../../src/domain/quantity.js';
+import { AmountOutOfRange, mulDiv } from '../../src/domain/contract.js';
+import { lineAmountCents, parseQty, QTY_MAX_WHOLE_DIGITS, qtyToString, receiptStatus } from '../../src/domain/quantity.js';
 
 describe('parseQty / qtyToString', () => {
   it('reads dot or comma decimals up to 4 places, and integers', () => {
@@ -11,6 +12,22 @@ describe('parseQty / qtyToString', () => {
   it('round-trips to the numeric(18,4) text form', () => {
     expect([qtyToString(125_000), qtyToString(1), qtyToString(0)]).toEqual(['12.5000', '0.0001', '0.0000']);
     expect(parseQty(qtyToString(987_654_321))).toBe(987_654_321);
+  });
+});
+
+describe('quantity and amount limits (exact arithmetic below 2^53)', () => {
+  it('parseQty takes up to 11 whole digits: 99 999 999 999.9999 yes, 100 000 000 000 no', () => {
+    const max = '9'.repeat(QTY_MAX_WHOLE_DIGITS);
+    expect(parseQty(`${max}.9999`)).toBe(Number(max) * 10_000 + 9999);
+    expect(Number.isSafeInteger(parseQty(`${max}.9999`))).toBe(true);
+    expect(parseQty(`1${'0'.repeat(QTY_MAX_WHOLE_DIGITS)}`)).toBeNull();
+  });
+
+  it('an amount whose exact result leaves the safe range is refused (AmountOutOfRange), never rounded', () => {
+    expect(() => lineAmountCents(parseQty('99999999999')!, 1_000_000_000_00)).toThrow(AmountOutOfRange);
+    expect(() => mulDiv(Number.MAX_SAFE_INTEGER, 2, 1)).toThrow(AmountOutOfRange);
+    expect(mulDiv(Number.MAX_SAFE_INTEGER, 1, 1)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(mulDiv(-Number.MAX_SAFE_INTEGER, 1, 1)).toBe(-Number.MAX_SAFE_INTEGER);
   });
 });
 

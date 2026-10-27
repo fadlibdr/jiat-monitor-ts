@@ -38,6 +38,25 @@ const SITE_SCOPE: Record<TenantTable, string | null> = {
   intake_events: `jiat_site_allowed(site_id)`,
   attachments: `(site_id IS NULL OR jiat_site_allowed(site_id))`,
   vendor_invoices: `jiat_site_allowed(site_id)`,
+  document_sequences: null, // per company, no site dimension
+  purchase_requests: `jiat_site_allowed(site_id)`,
+  purchase_request_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM purchase_requests p WHERE p.id = pr_id))`,
+  purchase_orders: `jiat_site_allowed(site_id)`,
+  purchase_order_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM purchase_orders p WHERE p.id = po_id))`,
+  goods_receipts: `jiat_site_allowed(site_id)`,
+  goods_receipt_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM goods_receipts g WHERE g.id = gr_id))`,
+  progress_reports: `jiat_site_allowed(site_id)`,
+  progress_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM progress_reports r WHERE r.id = report_id))`,
+  sales_invoices: `jiat_site_allowed(site_id)`,
+  payments: `jiat_site_allowed(site_id)`,
+  dash_contracts: `jiat_site_allowed(site_id)`,
+  dash_progress: `jiat_site_allowed(site_id)`,
+  dash_monthly: `jiat_site_allowed(site_id)`,
+  dash_balances: `jiat_site_allowed(site_id)`,
+  dash_vendors: `jiat_site_allowed(site_id)`,
+  dash_alerts: `jiat_site_allowed(site_id)`,
+  dash_refreshes: null,
+  daily_digests: null,
 };
 
 export function rlsStatements(): string[] {
@@ -48,7 +67,7 @@ export function rlsStatements(): string[] {
     `CREATE EXTENSION IF NOT EXISTS pg_trgm;`,
     `GRANT USAGE ON SCHEMA public TO ${APP_ROLE}, ${HOLDING_ROLE};`,
     // non-tenant tables: app may read/write, holding may read
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications, telegram_chats, jobs TO ${APP_ROLE};`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON companies, users, company_users, management_viewers, sessions, accounts, verifications, telegram_chats, telegram_link_codes, jobs TO ${APP_ROLE};`,
     `GRANT SELECT ON companies, users, company_users, management_viewers TO ${HOLDING_ROLE};`,
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};`,
     `CREATE OR REPLACE FUNCTION jiat_site_unscoped() RETURNS boolean LANGUAGE sql STABLE AS $$

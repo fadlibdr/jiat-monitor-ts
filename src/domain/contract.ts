@@ -1,3 +1,4 @@
+import { wibDate } from './date.js';
 import type { Cents } from './money.js';
 
 /**
@@ -32,14 +33,21 @@ export function ppnOf(dppCents: Cents, ppnRateBp: number): Cents {
   return mulDiv(dppCents, ppnRateBp, BP_100);
 }
 
+/** An amount or quantity outside what can be computed exactly (beyond 2^53): the input, not the server, is wrong (→ 400). */
+export class AmountOutOfRange extends RangeError {
+  override readonly name = 'AmountOutOfRange';
+}
+
+const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
 /**
  * a × b / d rounded half away from zero, exact for any safe-integer inputs. Money × basis points
  * leaves the safe range quickly (Rp 10 M-billion DPP = 1e12 cents × 10 000 bp > 2^53), so the
- * product is taken in BigInt.
+ * product is taken in BigInt. A result that is not a safe integer is refused, never rounded.
  */
 export function mulDiv(a: number, b: number, d: number): number {
   if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || !Number.isSafeInteger(d) || d === 0) {
-    throw new RangeError(`mulDiv: argumen tidak valid (${a}, ${b}, ${d})`);
+    throw new AmountOutOfRange(`mulDiv: argumen tidak valid (${a}, ${b}, ${d})`);
   }
   const p = BigInt(a) * BigInt(b);
   const D = BigInt(d);
@@ -47,6 +55,7 @@ export function mulDiv(a: number, b: number, d: number): number {
   const r = p % D;
   const twice = (r < 0n ? -r : r) * 2n;
   if (twice >= (D < 0n ? -D : D)) q += (p < 0n) !== (D < 0n) ? -1n : 1n;
+  if (q > SAFE_MAX || q < -SAFE_MAX) throw new AmountOutOfRange(`mulDiv: hasil di luar batas (${a} × ${b} / ${d})`);
   return Number(q);
 }
 
@@ -66,11 +75,15 @@ export function effectiveContract(k: ContractBase, addendums: readonly AddendumL
   };
 }
 
-/** Whole days from `today` to `endDate` (negative when overdue); null without an end date. */
+/**
+ * Whole days from `today` to `endDate` (negative when overdue); null without an end date. Counted
+ * from today's WIB date: at 01:00 WIB it is already the next day on site, though still the previous one in UTC.
+ */
 export function daysLeft(endDate: string | null, today: Date): number | null {
   if (!endDate) return null;
   const end = Date.UTC(+endDate.slice(0, 4), +endDate.slice(5, 7) - 1, +endDate.slice(8, 10));
-  const t = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const w = wibDate(today);
+  const t = Date.UTC(+w.slice(0, 4), +w.slice(5, 7) - 1, +w.slice(8, 10));
   return Math.round((end - t) / 86_400_000);
 }
 

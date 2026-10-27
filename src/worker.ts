@@ -1,7 +1,9 @@
 /**
- * Background worker (LLD §9): runs queued jobs — today the Telegram intake (photo + correction).
- * A separate process from the API, kept alive by the process manager on the VPS; several workers
- * may run, the queue hands each job to one (FOR UPDATE SKIP LOCKED).
+ * Background worker (LLD §9): runs queued jobs — the Telegram intake (photo + correction) and the
+ * scheduled jobs (dashboard refresh every HOLDING_MV_REFRESH_MINUTES, DailyDigest 07:00 WIB, purge
+ * 02:00 WIB). A separate process from the API, kept alive by the process manager on the VPS; several
+ * workers may run: the queue hands each job to one (FOR UPDATE SKIP LOCKED) and each scheduled slot
+ * is enqueued once (jobs.dedupe_key).
  *
  *   npm run worker
  */
@@ -12,7 +14,10 @@ import { OpenAiCompatibleOcr } from './intake/ocr.js';
 import { intakeRegistry } from './intake/pipeline.js';
 import { LocalDiskStorage } from './intake/storage.js';
 import { TelegramBotApi } from './intake/telegram-api.js';
-import { runWorker } from './jobs/queue.js';
+import { runWorker, type Registry } from './jobs/queue.js';
+import { runScheduler } from './jobs/schedule.js';
+import { createLogger } from './log.js';
+import { opsRegistry, opsSchedules } from './ops/registry.js';
 
 const Env = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL harus diisi (lihat .env.example).'),
@@ -26,34 +31,45 @@ const Env = z.object({
   INTAKE_TOTAL_CONFIDENCE_MIN: z.coerce.number().min(0).max(1).default(0.7),
   INTAKE_MAX_PHOTO_MB: z.coerce.number().positive().max(20).default(10),
   WORKER_POLL_MS: z.coerce.number().int().min(100).default(1000),
+  HOLDING_MV_REFRESH_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+  DAILY_DIGEST: z.enum(['0', '1']).default('1'),
 });
 
 /** One JSON object per line, with company/chat/message ids and never photo bytes or account numbers (LLD §9). */
-function log(msg: string, meta: object = {}): void {
-  console.log(JSON.stringify({ time: new Date().toISOString(), level: msg.endsWith('failed') ? 'error' : 'info', msg, ...meta }));
-}
+const log = createLogger({ service: 'worker' });
 
 async function main(): Promise<void> {
   const env = Env.parse(process.env);
   const { db, ping, close } = createDb(env.DATABASE_URL);
   await ping();
 
-  const registry = intakeRegistry({
-    db,
-    telegram: new TelegramBotApi(env.TELEGRAM_BOT_TOKEN),
-    storage: new LocalDiskStorage(env.STORAGE_DIR),
-    ocr: new OpenAiCompatibleOcr({ baseUrl: env.OCR_BASE_URL, apiKey: env.OCR_API_KEY, modelStage1: env.OCR_MODEL_STAGE1, modelStage2: env.OCR_MODEL_STAGE2 }),
-    now: () => new Date(),
-    config: { qualityMin: env.INTAKE_QUALITY_MIN, totalConfidenceMin: env.INTAKE_TOTAL_CONFIDENCE_MIN, maxPhotoBytes: env.INTAKE_MAX_PHOTO_MB * 1024 * 1024 },
-    log,
-  });
+  const telegram = new TelegramBotApi(env.TELEGRAM_BOT_TOKEN);
+  const storage = new LocalDiskStorage(env.STORAGE_DIR);
+  const now = () => new Date();
+  const digest = env.DAILY_DIGEST === '1';
+  const registry: Registry = {
+    ...intakeRegistry({
+      db,
+      telegram,
+      storage,
+      ocr: new OpenAiCompatibleOcr({ baseUrl: env.OCR_BASE_URL, apiKey: env.OCR_API_KEY, modelStage1: env.OCR_MODEL_STAGE1, modelStage2: env.OCR_MODEL_STAGE2 }),
+      now,
+      config: { qualityMin: env.INTAKE_QUALITY_MIN, totalConfidenceMin: env.INTAKE_TOTAL_CONFIDENCE_MIN, maxPhotoBytes: env.INTAKE_MAX_PHOTO_MB * 1024 * 1024 },
+      log,
+    }),
+    ...opsRegistry({ db, storage, telegram, digest, now, log }),
+  };
+  const schedules = opsSchedules({ refreshMinutes: env.HOLDING_MV_REFRESH_MINUTES, digest });
 
   const ac = new AbortController();
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { log('worker_stopping', { signal: sig }); ac.abort(); });
   const workerId = `${hostname()}:${process.pid}`;
-  log('worker_started', { workerId, kinds: Object.keys(registry) });
+  log('worker_started', { workerId, kinds: Object.keys(registry), schedules: schedules.map((s) => s.kind) });
   try {
-    await runWorker({ db, registry, workerId, pollMs: env.WORKER_POLL_MS, signal: ac.signal, log });
+    await Promise.all([
+      runWorker({ db, registry, workerId, pollMs: env.WORKER_POLL_MS, signal: ac.signal, log }),
+      runScheduler({ db, schedules, now, signal: ac.signal, log }),
+    ]);
   } finally {
     await close();
   }

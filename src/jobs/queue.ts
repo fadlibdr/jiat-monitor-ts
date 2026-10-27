@@ -57,6 +57,20 @@ export async function enqueue(tx: Tx, spec: JobSpec): Promise<number> {
   return row!.id;
 }
 
+/** Enqueues unless a job with this dedupe key already exists (done, failed or pending). True when inserted. */
+export async function enqueueOnce(tx: Tx, spec: JobSpec & { dedupeKey: string }): Promise<boolean> {
+  if (spec.companyId === undefined) throw new Error(`job ${spec.kind}: company_id wajib (null untuk job sistem).`);
+  const rows = await tx.insert(jobs).values({
+    kind: spec.kind,
+    companyId: spec.companyId,
+    payload: spec.payload ?? {},
+    dedupeKey: spec.dedupeKey,
+    ...(spec.runAt ? { runAt: spec.runAt } : {}),
+    ...(spec.maxAttempts ? { maxAttempts: spec.maxAttempts } : {}),
+  }).onConflictDoNothing({ target: jobs.dedupeKey }).returning({ id: jobs.id });
+  return rows.length > 0;
+}
+
 /** Takes the oldest due job, or null. Increments attempts as part of the claim. */
 export async function claimNext(db: Db, workerId: string): Promise<Job | null> {
   const [row] = await withApp(db, (tx) =>
@@ -173,8 +187,14 @@ export const ERROR_TEXT_MAX = 1000;
  * not copy parameter values (row data) into logs.
  */
 export function errorText(e: unknown): string {
-  let root: unknown = e;
-  for (let depth = 0; depth < 5 && root instanceof Error && root.cause instanceof Error; depth++) root = root.cause;
-  const s = root instanceof Error ? `${root.name}: ${root.message}` : String(root);
+  const innermost = (x: unknown) => {
+    let root: unknown = x;
+    for (let depth = 0; depth < 5 && root instanceof Error && root.cause instanceof Error; depth++) root = root.cause;
+    return root instanceof Error ? `${root.name}: ${root.message}` : String(root);
+  };
+  // AggregateError (several companies failed): its own message says how many, the entries say why
+  const s = e instanceof AggregateError
+    ? `${e.name}: ${e.message} [${e.errors.map((x) => `${x instanceof Error ? x.message : String(x)}: ${innermost(x)}`).join('; ')}]`
+    : innermost(e);
   return s.length > ERROR_TEXT_MAX ? `${s.slice(0, ERROR_TEXT_MAX)}…` : s;
 }
