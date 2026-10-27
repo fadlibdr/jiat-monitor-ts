@@ -161,7 +161,7 @@ describe('schedule over HTTP: roles, site scope, tenancy', () => {
   });
 
   it('another company cannot overwrite the plan through its own tenant path (404, nothing written)', async () => {
-    expect(await H.code(H.req(w.mgrB, 'PUT', path(), [], w.B))).toBe(404);
+    expect(await H.code(H.req(w.mgrB, 'PUT', path(), [{ code: null, period: '2026-10', plannedPct: 10 }], w.B))).toBe(404);
     expect(await H.ok<unknown[]>(H.req(w.mgr, 'GET', path()))).toHaveLength(2);
   });
 

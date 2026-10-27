@@ -31,13 +31,13 @@ describe('termin_siap', () => {
     await addTerms(w, w.A, K, [{ seq: 1, percentBp: 3000, triggerBp: 2500 }, { seq: 2, percentBp: 7000, triggerBp: 10_000 }]);
     const r = await addActual(w, w.A, K, '2026-09-01', [{ leaf: leaf.L!, micro: 24_999_999 }]);
     let s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.kind === 'termin_siap' && a.ref === `contract:${K}`)).toEqual([]);
+    expect(s.alerts.filter((a) => a.kind === 'termin_siap' && a.ref.startsWith(`contract:${K}:`))).toEqual([]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsTotal: 2, termsIssued: 0, termsReady: 0 });
 
     await setActual(w, w.A, r.itemIds[0]!, 25_000_000);
     s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.kind === 'termin_siap' && a.ref === `contract:${K}`)).toEqual([{
-      companyId: w.A, kind: 'termin_siap', ref: `contract:${K}`, siteId: w.s1,
+    expect(s.alerts.filter((a) => a.kind === 'termin_siap' && a.ref.startsWith(`contract:${K}:`))).toEqual([{
+      companyId: w.A, kind: 'termin_siap', ref: `contract:${K}:term:1`, siteId: w.s1,
       data: { contractId: K, contractNumber: number, termSeq: 1, triggerBp: 2500, actualMicroPct: 25_000_000 },
     }]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsReady: 1 });
@@ -46,7 +46,7 @@ describe('termin_siap', () => {
   it('a termin with a 0 % trigger (paid at signing) is ready without any opname', async () => {
     const { K } = await addContract(w, w.A, w.s1);
     await addTerms(w, w.A, K, [{ seq: 1, percentBp: 1000, triggerBp: 0 }, { seq: 2, percentBp: 9000, triggerBp: 10_000 }]);
-    const a = await alertsOf('termin_siap', `contract:${K}`);
+    const a = await alertsOf('termin_siap', `contract:${K}:term:1`);
     expect(a.map((x) => x.data['termSeq'])).toEqual([1]);
   });
 
@@ -55,22 +55,24 @@ describe('termin_siap', () => {
     const t = await addTerms(w, w.A, K, [{ seq: 1, percentBp: 3000, triggerBp: 2500 }, { seq: 2, percentBp: 7000, triggerBp: 10_000 }]);
     await addActual(w, w.A, K, '2026-10-01', [{ leaf: leaf.L!, micro: 100_000_000 }]);
     let s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.ref === `contract:${K}` && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([1]);
+    expect(s.alerts.filter((a) => a.ref.startsWith(`contract:${K}:`) && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([1]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsIssued: 0, termsReady: 2 });
 
     await addSalesInvoice(w, w.A, { K, termId: t[1]!, invoiceDate: '2026-10-20', dueDate: '2026-12-20', totalCents: 300_000 * RP });
     s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.ref === `contract:${K}` && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([2]);
+    expect(s.alerts.filter((a) => a.ref.startsWith(`contract:${K}:`) && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([2]);
+    // a different alert than termin 1's, so the next morning's digest lists it as new
+    expect(s.alerts.filter((a) => a.kind === 'termin_siap' && a.ref.startsWith(`contract:${K}:`)).map((a) => a.ref)).toEqual([`contract:${K}:term:2`]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsIssued: 1, termsReady: 1 });
 
     const inv2 = await addSalesInvoice(w, w.A, { K, termId: t[2]!, invoiceDate: '2026-10-21', dueDate: '2026-12-21', totalCents: 700_000 * RP });
     s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.ref === `contract:${K}` && a.kind === 'termin_siap')).toEqual([]);
+    expect(s.alerts.filter((a) => a.ref.startsWith(`contract:${K}:`) && a.kind === 'termin_siap')).toEqual([]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsIssued: 2, termsReady: 0 });
 
     await setSalesInvoiceStatus(w, w.A, inv2.id, 'cancelled');
     s = await snap(w, w.A);
-    expect(s.alerts.filter((a) => a.ref === `contract:${K}` && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([2]);
+    expect(s.alerts.filter((a) => a.ref.startsWith(`contract:${K}:`) && a.kind === 'termin_siap').map((a) => a.data['termSeq'])).toEqual([2]);
     expect(s.contracts.find((k) => k.contractId === K)).toMatchObject({ termsIssued: 1, termsReady: 1 });
   });
 

@@ -85,10 +85,11 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
     }
 
     if (k.status !== 'active') continue;
-    // termin are billed in order, so only the first open one can be "ready"
+    // termin are billed in order, so only the first open one can be "ready"; the termin is part of the
+    // alert's identity, so termin 2 becoming ready is a NEW alert in the digest after termin 1 was
     const next = kTerms.find((t) => !invoiced.has(t.id));
     if (next && reached(next)) {
-      alert('termin_siap', `contract:${k.id}`, k.siteId, { contractId: k.id, contractNumber: k.number, termSeq: next.seq, triggerBp: next.triggerProgressBp, actualMicroPct: latestActual });
+      alert('termin_siap', `contract:${k.id}:term:${next.seq}`, k.siteId, { contractId: k.id, contractNumber: k.number, termSeq: next.seq, triggerBp: next.triggerProgressBp, actualMicroPct: latestActual });
     }
     const p = progressAt(curve, currentPeriod);
     if (p?.deviationMicroPct != null && p.deviationMicroPct < ALERT_RULES.deviationBelowMicroPct) {
@@ -124,8 +125,15 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
     const line = lineById.get(g.poItemId);
     if (line) bucket(g.siteId, monthOf(g.receivedAt)).grReceivedCents += lineAmountCents(q, line.unitPriceCents);
   }
-  const undeliveredOf = (poId: number) => poLines.filter((l) => l.poId === poId)
-    .reduce((s, l) => s + lineAmountCents(Math.max(0, (parseQty(l.qty) ?? 0) - (receivedByLine.get(l.id) ?? 0)), l.unitPriceCents), 0);
+  // value not yet received per PO, computed once (lines × POs grow without bound; no per-PO scan)
+  const undelivered = new Map<number, number>();
+  const firstLine = new Map<number, string>();
+  for (const l of poLines) {
+    const open = Math.max(0, (parseQty(l.qty) ?? 0) - (receivedByLine.get(l.id) ?? 0));
+    undelivered.set(l.poId, (undelivered.get(l.poId) ?? 0) + lineAmountCents(open, l.unitPriceCents));
+    if (!firstLine.has(l.poId)) firstLine.set(l.poId, l.description);
+  }
+  const undeliveredOf = (poId: number) => undelivered.get(poId) ?? 0;
   for (const i of invs) {
     const m = bucket(i.siteId, monthOf(i.invoiceDate));
     m.invoicedDppCents += i.dppCents;
@@ -232,7 +240,7 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
     if (age <= ALERT_RULES.poOlderThanDays) continue;
     alert('po_lewat_30_hari', `po:${po.id}`, po.siteId, {
       poId: po.id, poNumber: po.number, vendorName: vendorName.get(po.vendorId) ?? null,
-      firstItem: poLines.find((l) => l.poId === po.id)?.description.slice(0, 200) ?? null, ageDays: age, outstandingCents: undeliveredOf(po.id),
+      firstItem: firstLine.get(po.id)?.slice(0, 200) ?? null, ageDays: age, outstandingCents: undeliveredOf(po.id),
     });
   }
 

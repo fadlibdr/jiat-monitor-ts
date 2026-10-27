@@ -1,9 +1,12 @@
 import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { currentLeaves } from '../../src/boq/current.js';
 import { importBoq } from '../../src/boq/importer.js';
+import { vendors } from '../../src/db/schema.js';
 import { withCompany } from '../../src/db/tenant.js';
+import { approvePo, commitments, createPo, OUTSIDE_BOQ } from '../../src/procurement/service.js';
 import {
-  createReport, getReport, getSchedule, latestActualMicro, putReportItems, putSchedule, sCurve, sCurveMicro, transitionReport,
+  createReport, getReport, getSchedule, latestActualMicro, PLAN_PERIODS_MAX, PLAN_POINTS_MAX, putReportItems, putSchedule, sCurve, sCurveMicro, transitionReport,
 } from '../../src/progress/service.js';
 import { createWorld, http, rejects, seedContract, svc, type Seeded, type World } from './fixture.js';
 
@@ -247,6 +250,75 @@ describe('BOQ re-import', () => {
     ]);
     // Sep plan with the new weights: .5×50 + .4×25 = 35
     expect((await S.inA((tx) => sCurve(tx, K))).points[0]).toMatchObject({ period: '2026-09-01', plannedPct: 35 });
+  });
+});
+
+/** Same contract value as V1, but Beton K-250 grows from 100 to 150 m3 (an addendum added work). */
+const V3: Row[] = [
+  ['I', 'PEKERJAAN BETON', null, null, null, null],
+  ['1', 'Beton K-250', 'm3', 150, 4_000_000, 600_000_000],
+  ['II', 'PEKERJAAN BOR', null, null, null, null],
+  ['1', 'Pengeboran', 'LS', 1, 400_000_000, 400_000_000],
+];
+/** Pengeboran (II.1) is gone; its value moved into Beton. */
+const V4: Row[] = [
+  ['I', 'PEKERJAAN BETON', null, null, null, null],
+  ['1', 'Beton K-250', 'm3', 100, 10_000_000, 1_000_000_000],
+];
+
+describe('BOQ re-import that changes a volume', () => {
+  let K = 0;
+  beforeAll(async () => {
+    K = (await seedContract(w, w.A, w.s1, null)).K;
+    await S.inA(async (tx) => importBoq(tx, K, await workbook(V1)));
+    // September: 80 of the 100 m3 (80 %) measured; Pengeboran given as a percent
+    await S.approved(K, '2026-09', [{ code: 'I.1', qtyDone: '80' }, { code: 'II.1', cumulativePct: 25 }]);
+    await S.inA(async (tx) => importBoq(tx, K, await workbook(V3)));
+  });
+
+  it('a measured line is re-based on the new volume: 80 of 150 m3 is 53.33 %, so 90 m3 in October is progress, not a drop', async () => {
+    const oct = await S.drafted(K, '2026-10', []);
+    // 79 m3 is less than the 80 already measured
+    await rejects(S.inA((tx) => putReportItems(tx, w.A, oct.id, [{ code: 'I.1', qtyDone: '79' }])), 400, /I\.1 turun dari 53\.333333%/);
+    const saved = await S.inA((tx) => putReportItems(tx, w.A, oct.id, [{ code: 'I.1', qtyDone: '90' }, { code: 'II.1', cumulativePct: 25 }]));
+    expect(saved.items.map((i) => i.cumulativeMicroPct)).toEqual([60 * M, 25 * M]);
+  });
+
+  it('the S-curve shows September against the new volume too (a percent line stays as given)', async () => {
+    // weights 60 % / 40 %: .6 × 53.333333 + .4 × 25 = 42
+    const s = await S.inA((tx) => sCurve(tx, K));
+    expect(s.points.find((p) => p.period === '2026-09-01')?.actualPct).toBeCloseTo(42, 5);
+  });
+
+  it('PO lines on a code the new BOQ no longer has stay committed, under "di luar BOQ"', async () => {
+    const K2 = (await seedContract(w, w.A, w.s1, null)).K;
+    await S.inA(async (tx) => importBoq(tx, K2, await workbook(V1)));
+    const committed = 50_000_000;
+    await S.inA(async (tx) => {
+      const leaves = await currentLeaves(tx, K2);
+      const [v] = await tx.insert(vendors).values({ companyId: w.A, name: `PT Bor ${K2}` }).returning({ id: vendors.id });
+      const po = await createPo(tx, { companyId: w.A, userId: w.mgr }, {
+        siteId: w.s1, vendorId: v!.id, contractId: K2, orderDate: '2026-10-01', ppnRateBp: 0,
+        items: [{ boqItemId: leaves.find((l) => l.code === 'II.1')!.id, description: 'Pengeboran', qty: 1, unitPriceCents: committed }],
+      });
+      await approvePo(tx, po.id, w.mgr);
+    });
+    await S.inA(async (tx) => importBoq(tx, K2, await workbook(V4)));
+    const c = await S.inA((tx) => commitments(tx, K2));
+    expect(c.outside).toEqual([{ code: 'II.1', committedCents: committed, receivedCents: 0 }]);
+    expect(c.byCategory[OUTSIDE_BOQ]).toEqual({ budgetCents: 0, committedCents: committed, receivedCents: 0 });
+    expect(c.total.committedCents).toBe(committed);
+  });
+});
+
+describe('plan size bounds', () => {
+  it('refuses more than 240 months, more than the point budget, and an empty plan', async () => {
+    const C = await seedContract(w, w.A, w.s1);
+    const months = Array.from({ length: PLAN_PERIODS_MAX + 1 }, (_, i) => ({ code: null, period: `${2000 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`, plannedPct: 0 }));
+    await rejects(S.inA((tx) => putSchedule(tx, w.A, C.K, months)), 400, /paling banyak 240/);
+    const many = Array.from({ length: PLAN_POINTS_MAX + 1 }, () => ({ code: 'I.1', period: '2026-10', plannedPct: 1 }));
+    await rejects(S.inA((tx) => putSchedule(tx, w.A, C.K, many)), 400, /terlalu besar/);
+    expect(await S.inA((tx) => putSchedule(tx, w.A, C.K, months.slice(0, PLAN_PERIODS_MAX)))).toMatchObject({ points: PLAN_PERIODS_MAX * 2 });
   });
 });
 

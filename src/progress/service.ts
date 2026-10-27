@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, lt, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, max, type SQL } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { mulDiv } from '../domain/contract.js';
 import { parseQty, qtyToString } from '../domain/quantity.js';
@@ -16,6 +16,13 @@ import type { Tx } from '../db/tenant.js';
 
 export interface ScheduleEntry { code: string | null; period: string; plannedPct: number }
 
+/** A plan spans at most 20 years of months; every S-curve, dashboard and refresh walks these points. */
+export const PLAN_PERIODS_MAX = 240;
+/** Plan points after `code: null` lines are spread over every leaf (leaves × months). */
+export const PLAN_POINTS_MAX = 200_000;
+/** Rows per INSERT (4 bind parameters each, far below Postgres' 65,534). */
+const PLAN_INSERT_CHUNK = 5_000;
+
 /**
  * Replaces the plan of the contract's current BOQ. `code: null` applies a line to every leaf
  * (a contract-level S-curve, when only that is known). Per item the plan must not decrease.
@@ -24,11 +31,22 @@ export async function putSchedule(tx: Tx, companyId: number, contractId: number,
   const leaves = await currentLeaves(tx, contractId);
   if (!leaves.length) throw new HTTPException(409, { message: 'Kontrak belum punya BOQ; impor BOQ dulu.' });
   const byCode = new Map(leaves.map((l) => [l.code, l]));
-  const plan = new Map<number, Map<string, number>>(); // leaf id → period → micro
+  // bounded BEFORE expanding, so a request cannot make the API build millions of points
+  const periods = new Set<string>();
+  let points = 0;
   for (const [k, e] of entries.entries()) {
     const period = periodOf(e.period);
+    if (!period) throw new HTTPException(400, { message: `baris ${k + 1}: periode YYYY-MM dan plannedPct 0–100.` });
+    periods.add(period);
+    points += e.code === null ? leaves.length : 1;
+  }
+  if (periods.size > PLAN_PERIODS_MAX) throw new HTTPException(400, { message: `Rencana mencakup ${periods.size} bulan; paling banyak ${PLAN_PERIODS_MAX}.` });
+  if (points > PLAN_POINTS_MAX) throw new HTTPException(400, { message: `Rencana terlalu besar (${points} titik item × bulan); paling banyak ${PLAN_POINTS_MAX}.` });
+  const plan = new Map<number, Map<string, number>>(); // leaf id → period → micro
+  for (const [k, e] of entries.entries()) {
+    const period = periodOf(e.period)!;
     const micro = pctToMicro(e.plannedPct);
-    if (!period || micro === null) throw new HTTPException(400, { message: `baris ${k + 1}: periode YYYY-MM dan plannedPct 0–100.` });
+    if (micro === null) throw new HTTPException(400, { message: `baris ${k + 1}: periode YYYY-MM dan plannedPct 0–100.` });
     const targets: BoqItemRow[] = e.code === null ? leaves : [byCode.get(e.code)].filter((x): x is BoqItemRow => !!x);
     if (!targets.length) throw new HTTPException(400, { message: `baris ${k + 1}: kode ${e.code} bukan item daun BOQ aktif.` });
     for (const t of targets) {
@@ -46,7 +64,7 @@ export async function putSchedule(tx: Tx, companyId: number, contractId: number,
   }
   await tx.delete(boqSchedules).where(inArray(boqSchedules.boqItemId, leaves.map((l) => l.id)));
   const rows = [...plan].flatMap(([boqItemId, m]) => [...m].map(([period, plannedMicroPct]) => ({ companyId, boqItemId, period, plannedMicroPct })));
-  if (rows.length) await tx.insert(boqSchedules).values(rows);
+  for (let i = 0; i < rows.length; i += PLAN_INSERT_CHUNK) await tx.insert(boqSchedules).values(rows.slice(i, i + PLAN_INSERT_CHUNK));
   return { items: plan.size, points: rows.length };
 }
 
@@ -66,16 +84,19 @@ export async function getSchedule(tx: Tx, contractId: number) {
  */
 async function currentPlan(tx: Tx, contractId: number, leaves: readonly BoqItemRow[]): Promise<PlanPoint[]> {
   if (!leaves.length) return [];
-  const rows = await tx.select({ version: boqVersions.version, code: boqItems.code, period: boqSchedules.period, plannedMicroPct: boqSchedules.plannedMicroPct })
-    .from(boqSchedules)
+  // only the newest version that has a plan is read (old versions' plans are never deleted)
+  const [newest] = await tx.select({ version: max(boqVersions.version) }).from(boqSchedules)
     .innerJoin(boqItems, eq(boqItems.id, boqSchedules.boqItemId))
     .innerJoin(boqVersions, eq(boqVersions.id, boqItems.versionId))
     .where(eq(boqVersions.contractId, contractId));
-  if (!rows.length) return [];
-  const newest = Math.max(...rows.map((r) => r.version));
+  if (newest?.version == null) return [];
+  const rows = await tx.select({ code: boqItems.code, period: boqSchedules.period, plannedMicroPct: boqSchedules.plannedMicroPct })
+    .from(boqSchedules)
+    .innerJoin(boqItems, eq(boqItems.id, boqSchedules.boqItemId))
+    .innerJoin(boqVersions, eq(boqVersions.id, boqItems.versionId))
+    .where(and(eq(boqVersions.contractId, contractId), eq(boqVersions.version, newest.version)));
   const current = new Set(leaves.map((l) => l.code));
-  return rows.filter((r) => r.version === newest && current.has(r.code))
-    .map((r) => ({ code: r.code, period: r.period, plannedMicroPct: r.plannedMicroPct }));
+  return rows.filter((r) => current.has(r.code));
 }
 
 // --- opname reports ---
@@ -161,6 +182,23 @@ function monotonicViolation(b: Bounds, code: string, micro: number): string | nu
   return null;
 }
 
+/**
+ * Cumulative progress of an approved line against the CURRENT BOQ. A line measured in quantity is
+ * re-based on the current volume: after a re-import that changes an item's volume (an addendum adds
+ * work), 80 of the old 100 is 53 % of the new 150 — keeping 80 % would overstate the S-curve and
+ * refuse the true 90 of 150 (60 %) as "going backwards". A line given as a percent stays as given.
+ */
+function currentMicro(item: { qtyDone: string | null; cumulativeMicroPct: number }, leafQty: number | null | undefined): number {
+  const done = item.qtyDone === null ? null : parseQty(item.qtyDone);
+  if (done === null || !leafQty) return item.cumulativeMicroPct;
+  return Math.min(MICRO_100, mulDiv(done, MICRO_100, leafQty));
+}
+
+/** code → volume of the current BOQ leaf (qty4), for currentMicro. */
+function qtyByCode(leaves: readonly BoqItemRow[]): Map<string, number | null> {
+  return new Map(leaves.map((l) => [l.code, l.qty === null ? null : parseQty(l.qty)]));
+}
+
 /** code → cumulative micro-percent of the latest (or earliest) approved report matching `when`. */
 async function approvedByCode(tx: Tx, contractId: number, when: SQL, pick: 'latest' | 'earliest') {
   const reports = await tx.select({ id: progressReports.id, period: progressReports.period }).from(progressReports)
@@ -170,6 +208,7 @@ async function approvedByCode(tx: Tx, contractId: number, when: SQL, pick: 'late
   if (!reports.length) return out;
   const items = await tx.select().from(progressItems).where(inArray(progressItems.reportId, reports.map((r) => r.id)));
   const codes = await codesOf(tx, items.map((i) => i.boqItemId));
+  const volume = qtyByCode(await currentLeaves(tx, contractId));
   const rank = new Map(reports.map((r, i) => [r.id, i])); // 0 = the one closest to the period
   const periodOf = new Map(reports.map((r) => [r.id, r.period]));
   const best = new Map<string, number>();
@@ -178,7 +217,7 @@ async function approvedByCode(tx: Tx, contractId: number, when: SQL, pick: 'late
     const r = rank.get(it.reportId)!;
     if (best.has(code) && best.get(code)! <= r) continue;
     best.set(code, r);
-    out.set(code, { micro: it.cumulativeMicroPct, period: periodOf.get(it.reportId)! });
+    out.set(code, { micro: currentMicro(it, volume.get(code)), period: periodOf.get(it.reportId)! });
   }
   return out;
 }
@@ -202,12 +241,14 @@ export async function transitionReport(tx: Tx, reportId: number, action: keyof t
   if (action === 'approve') {
     // re-checked here: another month may have been approved since these lines were saved. The
     // contract row is locked so two approvals of one contract are checked one after the other.
-    await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, report.contractId)).for('update');
+    await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, report.contractId)).for('no key update');
     const bounds = await approvedBounds(tx, report.contractId, report.period);
     const items = await tx.select().from(progressItems).where(eq(progressItems.reportId, reportId));
     const codes = await codesOf(tx, items.map((i) => i.boqItemId));
+    const volume = qtyByCode(await currentLeaves(tx, report.contractId));
     for (const it of items) {
-      const outOfOrder = monotonicViolation(bounds, codes.get(it.boqItemId)!, it.cumulativeMicroPct);
+      const code = codes.get(it.boqItemId)!;
+      const outOfOrder = monotonicViolation(bounds, code, currentMicro(it, volume.get(code)));
       if (outOfOrder) throw new HTTPException(409, { message: `Belum bisa disetujui: ${outOfOrder}` });
     }
   }
@@ -254,6 +295,10 @@ export async function sCurveMicro(tx: Tx, contractId: number) {
   const items = approved.length ? await tx.select().from(progressItems).where(inArray(progressItems.reportId, approved.map((r) => r.id))) : [];
   const itemCodes = await codesOf(tx, items.map((i) => i.boqItemId));
   const periodOfReport = new Map(approved.map((r) => [r.id, r.period]));
-  const actual: ActualPoint[] = items.map((i) => ({ code: itemCodes.get(i.boqItemId)!, period: periodOfReport.get(i.reportId)!, cumulativeMicroPct: i.cumulativeMicroPct }));
+  const volume = qtyByCode(leaves);
+  const actual: ActualPoint[] = items.map((i) => {
+    const code = itemCodes.get(i.boqItemId)!;
+    return { code, period: periodOfReport.get(i.reportId)!, cumulativeMicroPct: currentMicro(i, volume.get(code)) };
+  });
   return computeSCurve(leafWeights, plan, actual);
 }

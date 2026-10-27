@@ -241,11 +241,15 @@ export async function receive(tx: Tx, actor: Actor, poId: number, input: GrInput
 
 // --- commitment vs BOQ ---
 
+/** Category of PO lines whose BOQ code is no longer a leaf of the current BOQ (split, merged or removed). */
+export const OUTSIDE_BOQ = 'di_luar_boq';
+
 /**
  * Per BOQ leaf of the current version: budget, committed (lines of issued/partial/received POs)
  * and received value (qty received × unit price). Lines are matched by BOQ code, so POs written
  * against an older BOQ version still count after a re-import. Totals per category feed the
- * mockup's "Komitmen vs BOQ" panel.
+ * mockup's "Komitmen vs BOQ" panel. Lines on a code the current BOQ no longer has as a leaf are
+ * still committed money: they are listed in `outside` and counted under OUTSIDE_BOQ, never dropped.
  */
 export async function commitments(tx: Tx, contractId: number) {
   const leaves = await currentLeaves(tx, contractId);
@@ -268,13 +272,17 @@ export async function commitments(tx: Tx, contractId: number) {
     boqItemId: leaf.id, code: leaf.code, description: leaf.description, category: leaf.category,
     budgetCents: leaf.amountCents, ...(byCode.get(leaf.code) ?? { committedCents: 0, receivedCents: 0 }),
   }));
+  const leafCodes = new Set(leaves.map((l) => l.code));
+  const outside = [...byCode].filter(([code]) => !leafCodes.has(code)).map(([code, m]) => ({ code, ...m }));
   const byCategory: Record<string, { budgetCents: number; committedCents: number; receivedCents: number }> = {};
-  for (const it of items) {
-    const key = it.category ?? 'tanpa_kategori';
+  const add = (key: string, m: { budgetCents: number; committedCents: number; receivedCents: number }) => {
     const c = (byCategory[key] ??= { budgetCents: 0, committedCents: 0, receivedCents: 0 });
-    c.budgetCents += it.budgetCents; c.committedCents += it.committedCents; c.receivedCents += it.receivedCents;
-  }
-  const total = items.reduce((s, it) => ({ budgetCents: s.budgetCents + it.budgetCents, committedCents: s.committedCents + it.committedCents, receivedCents: s.receivedCents + it.receivedCents }),
-    { budgetCents: 0, committedCents: 0, receivedCents: 0 });
-  return { items, byCategory, total };
+    c.budgetCents += m.budgetCents; c.committedCents += m.committedCents; c.receivedCents += m.receivedCents;
+  };
+  for (const it of items) add(it.category ?? 'tanpa_kategori', it);
+  for (const o of outside) add(OUTSIDE_BOQ, { budgetCents: 0, ...o });
+  const total = Object.values(byCategory).reduce((s, c) => ({
+    budgetCents: s.budgetCents + c.budgetCents, committedCents: s.committedCents + c.committedCents, receivedCents: s.receivedCents + c.receivedCents,
+  }), { budgetCents: 0, committedCents: 0, receivedCents: 0 });
+  return { items, outside, byCategory, total };
 }

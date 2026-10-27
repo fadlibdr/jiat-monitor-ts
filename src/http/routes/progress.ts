@@ -10,11 +10,14 @@ import {
   APPROVE_ROLES, ContractParams, EDIT_ROLES, IdParam, jsonBody, OPNAME_ROLES, requireRole, type App, type RouteDeps,
 } from '../context.js';
 
+/** A plan line's month: 2000–2099 (a typo like 0202 or 9999 would stretch every S-curve over centuries). */
+const PlanPeriod = z.string().regex(/^20\d{2}-\d{2}(-\d{2})?$/, 'periode YYYY-MM antara 2000 dan 2099');
+/** At least one line: an empty PUT would silently bring back an older BOQ version's plan (see currentPlan). */
 const ScheduleBody = z.array(z.object({
   code: z.string().min(1).max(80).nullable(),
-  period: z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/),
+  period: PlanPeriod,
   plannedPct: z.number().min(0).max(100),
-})).max(20_000);
+})).min(1, 'rencana kosong').max(20_000);
 const ReportBody = z.object({ contractId: IdParam, period: z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/), note: z.string().max(2000).optional() });
 const OpnameBody = z.array(z.object({
   boqItemId: IdParam.optional(),

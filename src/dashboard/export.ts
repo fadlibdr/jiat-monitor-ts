@@ -122,9 +122,9 @@ export async function panelsToXlsx(p: Panels, labels: Labels, meta: { refreshedA
   sheet(wb, 'Peringatan', [
     { header: 'Jenis', key: 'kind', width: 24 }, { header: 'Perusahaan', key: 'company', width: 24 }, { header: 'Lokasi', key: 'site', width: 24 },
     { header: 'Rincian', key: 'detail', width: 80 },
-  ], p.alerts.map(({ kind, companyId, siteId, ref: _ref, ...data }) => ({
-    kind, company: labels.company(companyId), site: labels.site(siteId),
-    detail: Object.entries(data).map(([k, v]) => `${k}=${v ?? '—'}`).join(' · '),
+  ], p.alerts.map((a) => ({
+    // the same words as the dashboard and the digest, never raw cents or micro-percent
+    kind: a.label, company: labels.company(a.companyId), site: labels.site(a.siteId), detail: a.text,
   })));
 
   return Buffer.from(await wb.xlsx.writeBuffer());

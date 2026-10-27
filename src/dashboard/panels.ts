@@ -1,6 +1,7 @@
 import { daysLeft, mulDiv } from '../domain/contract.js';
 import { combineCurves, progressAt, type SCurvePoint } from '../domain/scurve.js';
 import type { DashMoney } from '../db/schema.js';
+import { alertText, ALERT_LABELS } from './alert-text.js';
 import type { SnapshotRows } from './snapshot.js';
 
 /**
@@ -49,8 +50,37 @@ export function filterRows(rows: SnapshotRows, f: PanelFilter): SnapshotRows {
     monthly: keep(rows.monthly),
     balances: keep(rows.balances),
     vendors: keep(rows.vendors),
-    // contract alerts follow the contract filter; document alerts follow company and site
-    alerts: keep(rows.alerts).filter((a) => !a.ref.startsWith('contract:') || ids.has(Number(a.ref.slice('contract:'.length)))),
+    // contract alerts ("contract:12", "contract:12:term:3") follow the contract filter; document alerts follow company and site
+    alerts: keep(rows.alerts).filter((a) => {
+      const m = /^contract:(\d+)(?::|$)/.exec(a.ref);
+      return !m || ids.has(Number(m[1]));
+    }),
+  };
+}
+
+/**
+ * Progress of several contracts at `period`, weighted by effective DPP: each contract compared at
+ * ITS latest month with an approved actual (progressAt), so one contract's report coming a month
+ * later does not pair its last actual with this month's plan (a lag nobody has). Contracts without
+ * any approved actual yet are left out of both sides; null when no contract has one.
+ */
+export function weightedProgressAt(parts: ReadonlyArray<{ weightCents: number; point: SCurvePoint | null }>): SCurvePoint | null {
+  const used = parts.filter((p): p is { weightCents: number; point: SCurvePoint & { actualMicroPct: number } } =>
+    p.weightCents > 0 && p.point !== null && p.point.actualMicroPct !== null);
+  if (!used.length) return null;
+  let w = 0n; let planned = 0n; let actual = 0n;
+  for (const p of used) {
+    const k = BigInt(p.weightCents);
+    w += k;
+    planned += k * BigInt(p.point.plannedMicroPct);
+    actual += k * BigInt(p.point.actualMicroPct);
+  }
+  const div = (x: bigint) => Number((x * 2n + w) / (2n * w)); // half up; all terms are non-negative
+  const plannedMicroPct = div(planned);
+  const actualMicroPct = div(actual);
+  return {
+    period: used.reduce((m, p) => (p.point.period > m ? p.point.period : m), used[0]!.point.period),
+    plannedMicroPct, actualMicroPct, deviationMicroPct: actualMicroPct - plannedMicroPct,
   };
 }
 
@@ -66,8 +96,17 @@ export function buildPanels(all: SnapshotRows, f: PanelFilter, today: Date) {
     combineCurves(ks.map((k) => ({ weightCents: k.valueDppEffectiveCents, points: curveOf.get(k.contractId) ?? [] })));
   const inRange = (period: string) => (!f.from || period >= f.from) && (!f.to || period <= f.to);
   const portfolio = weighted(rows.contracts);
+  /** each contract at its own latest approved month; before any report, the plan alone */
+  const progressOf = (ks: typeof rows.contracts) =>
+    weightedProgressAt(ks.map((k) => ({ weightCents: k.valueDppEffectiveCents, point: progressAt(curveOf.get(k.contractId) ?? [], f.period) })))
+    ?? progressAt(weighted(ks), f.period);
   const commitment = rows.contracts.reduce((s, k) => addMoney(s, k.commitment.total ?? ZERO), ZERO);
-  const costToDate = sum(rows.monthly.filter((m) => m.period <= f.period), (m) => sum(Object.values(m.costByCategory), (v) => v));
+  // cost is recorded per site, not per contract: with a contract filter (status, employer) only the
+  // filtered contracts' sites count, so cost and the BOQ budget it is compared with cover the same work
+  const contractFilter = !!f.status || !!f.employer;
+  const siteKeys = new Set(rows.contracts.map((k) => `${k.companyId}:${k.siteId}`));
+  const costRows = contractFilter ? rows.monthly.filter((m) => siteKeys.has(`${m.companyId}:${m.siteId}`)) : rows.monthly;
+  const costToDate = sum(costRows.filter((m) => m.period <= f.period), (m) => sum(Object.values(m.costByCategory), (v) => v));
 
   const summary = {
     contracts: rows.contracts.length,
@@ -80,13 +119,13 @@ export function buildPanels(all: SnapshotRows, f: PanelFilter, today: Date) {
     costRealisedCents: costToDate,
     budgetCents: commitment.budgetCents,
     costOfBudgetBp: ratioBp(costToDate, commitment.budgetCents),
-    progress: progressAt(portfolio, f.period),
+    progress: progressOf(rows.contracts),
   };
 
   const companyIds = [...new Set(rows.contracts.map((k) => k.companyId))].sort((a, b) => a - b);
   const byCompany = companyIds.map((companyId) => {
     const ks = rows.contracts.filter((k) => k.companyId === companyId);
-    return { companyId, contracts: ks.length, valueDppEffectiveCents: sum(ks, (k) => k.valueDppEffectiveCents), progress: progressAt(weighted(ks), f.period) };
+    return { companyId, contracts: ks.length, valueDppEffectiveCents: sum(ks, (k) => k.valueDppEffectiveCents), progress: progressOf(ks) };
   });
 
   const contractList = rows.contracts.map((k) => ({
@@ -168,8 +207,9 @@ export function buildPanels(all: SnapshotRows, f: PanelFilter, today: Date) {
       .sort((a, b) => b.photos7d - a.photos7d || a.siteId - b.siteId),
   };
 
+  // label and text worded once, here: the dashboards, the export and the digest say the same
   const alerts = [...rows.alerts].sort((a, b) => a.kind.localeCompare(b.kind) || a.companyId - b.companyId || a.ref.localeCompare(b.ref))
-    .map((a) => ({ ...a.data, kind: a.kind, companyId: a.companyId, siteId: a.siteId, ref: a.ref }));
+    .map((a) => ({ ...a.data, kind: a.kind, companyId: a.companyId, siteId: a.siteId, ref: a.ref, label: ALERT_LABELS[a.kind], text: alertText(a.kind, a.data) }));
 
   return {
     period: f.period,

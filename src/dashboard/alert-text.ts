@@ -38,7 +38,10 @@ export function alertText(kind: AlertKind, d: Data): string {
       return `${text(d.contractNumber)} · tertinggal ${points(-num(d.deviationMicroPct))} poin dari rencana ${month(d.period)}`;
     case 'po_lewat_30_hari':
       return `PO ${text(d.poNumber)}${d.firstItem ? ` ${String(d.firstItem).slice(0, 60)}` : ''}, ${num(d.ageDays)} hari belum diterima`;
-    case 'kontrak_mendekati_batas':
-      return `${text(d.contractNumber)} · sisa ${num(d.daysLeft)} hari, progres ${pct(d.actualMicroPct)}`;
+    case 'kontrak_mendekati_batas': {
+      const left = num(d.daysLeft);
+      const when = left > 0 ? `sisa ${left} hari` : left === 0 ? 'berakhir hari ini' : `lewat batas ${-left} hari`;
+      return `${text(d.contractNumber)} · ${when}, progres ${pct(d.actualMicroPct)}`;
+    }
   }
 }
