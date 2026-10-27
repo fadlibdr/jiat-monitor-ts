@@ -21,8 +21,9 @@ import * as schema from './schema.js';
  * boq_versions row (one import = one log row instead of hundreds), so they are left out.
  */
 export const AUDITED_TABLES = [
-  'companies', 'company_users', 'management_viewers',
+  'companies', 'company_users', 'management_viewers', 'telegram_chats',
   'sites', 'contracts', 'contract_addendums', 'contract_terms', 'boq_versions',
+  'vendors', 'vendor_invoices',
 ] as const;
 
 /** Every table with a created_by column gets the stamp trigger: derived, so a new table cannot be forgotten. */

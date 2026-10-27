@@ -7,7 +7,7 @@ import type { Authenticator } from '../auth/authenticator.js';
 import type { Auth } from '../auth/better-auth.js';
 import { BoqImportError } from '../boq/errors.js';
 import { companies, companyUsers } from '../db/schema.js';
-import { withApp, type Db } from '../db/tenant.js';
+import { siteScopeFor, withApp, type Db } from '../db/tenant.js';
 import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps } from './context.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCompanyRoutes } from './routes/company.js';
@@ -83,7 +83,7 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
     if (!member) throw new HTTPException(403, { message: 'Anda tidak terdaftar pada perusahaan ini.' });
     c.set('companyId', companyId);
     c.set('role', member.role);
-    c.set('tenant', { companyId, userId, siteIds: siteScope(member.role, member.siteIds) });
+    c.set('tenant', { companyId, userId, siteIds: siteScopeFor(member.role, member.siteIds) });
     await next();
   });
 
@@ -91,15 +91,6 @@ export function createApp({ db, auth, betterAuth, trustedOrigins = [], maxUpload
   registerCompanyRoutes(app, deps);
 
   return app;
-}
-
-/**
- * Site scope of a membership (HLD §2). site_staff see only the sites assigned to them — none until
- * assigned. Other roles see every site unless an explicit list was set on their membership.
- */
-export function siteScope(role: string, siteIds: number[] | null): number[] | null {
-  if (role === 'site_staff') return siteIds ?? [];
-  return siteIds;
 }
 
 function pgCode(err: unknown): string | undefined {
