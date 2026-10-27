@@ -75,7 +75,7 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
 
 - [x] **Enforce site scoping.** `company_users.site_ids` is stored (`schema.ts:83`) but never applied: `GET /companies/:id/sites` returns every site (`app.ts:162`). HLD §2 limits *Staf site* to their assigned site. Enforce it in RLS (a second setting such as `app.site_ids`) or in the route layer, and add tests. — **Done:** RESTRICTIVE RLS policy per tenant table (`src/db/rls.ts`), `withCompany({siteIds})`; tests in `test/db/site-scope-audit.test.ts`.
 - [x] **Model the system admin as global.** HLD §2 has *Admin sistem* manage companies, users and the Telegram mapping. The repo has `system_admin` as a per-company role, and any signed-in user may `POST /companies` (`app.ts:104`). Decide on a global admin flag and restrict company creation. — **Done:** `users.is_system_admin`, `/admin/*`; company creation moved to `POST /admin/companies`.
-- [ ] **Map the `finance` role.** *(Partly done: `FINANCE_ROLES` defined; the invoicing routes it guards arrive in Phase 4.)* It exists in `COMPANY_ROLES` but is granted nothing (`app.ts:64-65`), and the README role ladder omits it. Map it to the invoicing and payment routes.
+- [x] **Map the `finance` role.** *(Partly done: `FINANCE_ROLES` defined; the invoicing routes it guards arrive in Phase 4.)* It exists in `COMPANY_ROLES` but is granted nothing (`app.ts:64-65`), and the README role ladder omits it. Map it to the invoicing and payment routes. — **Done:** finance owns termin invoices, payments, receivables/payables and vendor bank/NPWP data (read and write).
 - [x] **Manage `management_viewers` over the API.** Today it is SQL only (README #5). Record `granted_by` and `granted_at`. — **Done:** `/admin/management-viewers` records `granted_by`/`granted_at`.
 - [x] **Add update and delete routes** (`PUT`/`DELETE`) for sites, contracts and members (README #5). — **Done:** PATCH sites/contracts, DELETE members (last-manager guard). Sites/contracts are closed via `status`, not deleted.
 - [x] **Add missing columns.** — **Done:** bank fields, `users.phone`, `created_by`/`updated_by` (filled by trigger).
@@ -96,8 +96,8 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
 
 - [ ] **Fixture test with the real Keerom `versi_2_RAPI` workbook.** Assert item count, hierarchy, `SUM(amount) = value_dpp` and total weight = 100.00 (LLD §10, Phase 1 exit criterion).
 - [ ] **Populate `boq_items.category`** (material/upah/alat/subkon/…). The column exists, but the importer never sets it (`src/boq/importer.ts:92`). Cost-by-category and the mockup's "material 61 % · subkon 29 %" depend on it. Decide where it comes from: an AHSP column, a keyword rule, or a manual step after import.
-- [ ] **Import the planned schedule (rencana / time schedule) into `boq_schedules`.** The table exists, but nothing writes to it. Without it there is no planned S-curve and no deviation alert.
-- [ ] **Define how BOQ versions interact with progress and procurement references** (§5.3).
+- [x] **Import the planned schedule (rencana / time schedule) into `boq_schedules`.** The table exists, but nothing writes to it. Without it there is no planned S-curve and no deviation alert. — **Done** as an API (`PUT …/boq/schedule`, per code or contract-wide); reading it from the RAB workbook's time-schedule sheet is still open.
+- [x] **Define how BOQ versions interact with progress and procurement references** (§5.3). — **Done:** progress, plan and commitments are matched by BOQ **code** across versions; the plan comes from the newest version that has one.
 
 ### 4.4 Intake: Telegram + OCR (Phase 2) — L
 
@@ -132,43 +132,43 @@ Built: `parseIdrCents` and `parseIndonesianDate` (MoneyParser/DateParser), `pars
 
 ### 4.5 Procurement (Phase 3) — L
 
-- [ ] **Tables:** `vendors` (shared with §4.4), `purchase_requests`/`_items`, `purchase_orders`/`_items`, `goods_receipts`/`_items`. Every item links to a `boq_item`.
-- [ ] **Document numbering.** `document_sequences` locked with `FOR UPDATE`, using the per-company prefix (`companies.doc_prefix` exists).
-- [ ] **Status workflows:** PR → PO (approved by company_manager, HLD §2) → GR with partial receipts. Compute commitment per BOQ item.
-- [ ] **Match intake rows to PO/GR** (`vendor_invoices.po_id` / `gr_id`, Phase 3 scope in HLD §9).
+- [x] **Tables:** `vendors` (shared with §4.4), `purchase_requests`/`_items`, `purchase_orders`/`_items`, `goods_receipts`/`_items`. Every item links to a `boq_item`. — **Done** (`drizzle/0004`).
+- [x] **Document numbering.** `document_sequences` locked with `FOR UPDATE`, using the per-company prefix (`companies.doc_prefix` exists). — **Done** with an atomic upsert on `document_sequences` (no separate lock needed), e.g. `PO/KRM/2026/031`.
+- [x] **Status workflows:** PR → PO (approved by company_manager, HLD §2) → GR with partial receipts. Compute commitment per BOQ item. — **Done.** PR approval added as well (the mockup shows "menunggu persetujuan").
+- [x] **Match intake rows to PO/GR** (`vendor_invoices.po_id` / `gr_id`, Phase 3 scope in HLD §9). — **Done:** `GET …/intake/:rowId/match-candidates`, `PUT …/intake/:rowId/match`.
 
 ### 4.6 Progress (Phase 3) — M
 
-- [ ] **Tables:** `progress_reports` (unique `(contract_id, period)`) and `progress_items` (unique `(report_id, boq_item_id)`).
-- [ ] **Opname input** by site staff. `POST /progress/{report}/approve` is for company_manager.
-- [ ] **`SCurveService`:** weighted cumulative actual vs. plan. Use the corrected formula in §5.2.
+- [x] **Tables:** `progress_reports` (unique `(contract_id, period)`) and `progress_items` (unique `(report_id, boq_item_id)`). — **Done.**
+- [x] **Opname input** by site staff. `POST /progress/{report}/approve` is for company_manager. — **Done:** by quantity done or cumulative percent; approved cumulative can never decrease (checked at save and approve, against earlier and later months).
+- [x] **`SCurveService`:** weighted cumulative actual vs. plan. Use the corrected formula in §5.2. — **Done** (`src/domain/scurve.ts`, carry-forward; portfolio curve weighted by effective DPP).
 
 ### 4.7 Invoicing & finance (Phase 4) — M–L
 
-- [ ] **Tables:** `sales_invoices` and `payments` (polymorphic), and `vendor_invoices` payables.
-- [ ] **`POST /invoices/sales/from-term`:**
+- [x] **Tables:** `sales_invoices` and `payments` (polymorphic), and `vendor_invoices` payables. — **Done.**
+- [x] **`POST /invoices/sales/from-term`:** — **Done** with the rule in §5.1 *(to confirm with finance)*; termin billed in order, cancelled from the last, negative termin refused.
   - DPP from the termin
   - PPN from `ppn_rate_bp`
   - retention and advance deduction (blocked on §5.1)
   - due date from `due_days`
-- [ ] **Aging service:** buckets 0–30 / 31–60 / 61–90 / > 90.
-- [ ] **Feature test:** approved progress triggers the termin with the correct DPP, PPN 11 %, retention and advance deduction (LLD §10).
+- [x] **Aging service:** buckets 0–30 / 31–60 / 61–90 / > 90. — **Done** (`GET …/receivables`, `GET …/payables`).
+- [x] **Feature test:** approved progress triggers the termin with the correct DPP, PPN 11 %, retention and advance deduction (LLD §10). — **Done** (`test/http/phase34-flow.test.ts`, `test/finance/finance.test.ts`).
 
 ### 4.8 Dashboards (Phase 4) — L
 
-- [ ] **Company dashboard:** `GET /dashboard/company?site_id=&period=`, live from tables.
-- [ ] **Four materialized views,** `mv_dashboard_contract`, `_procurement`, `_progress` and `_finance`:
+- [x] **Company dashboard:** `GET /dashboard/company?site_id=&period=`, live from tables. — **Done** as `GET /companies/:companyId/dashboard`, live in the caller's site scope; finance panel only for finance/managers.
+- [x] **Four materialized views,** `mv_dashboard_contract`, `_procurement`, `_progress` and `_finance`: — **Done differently:** snapshot tables `dash_*` written by the refresh job with the same functions as the detail screens (S-curve carry-forward is not re-implemented in SQL), replaced in one transaction per company.
   - grain: company × site × month
   - unique indexes so `REFRESH … CONCURRENTLY` works
   - rewrite the progress SQL first (§5.2)
-- [ ] **`RefreshHoldingViews`:** every 15 minutes, plus `POST /holding/refresh` rate-limited to once per minute. Store the last-refresh time for the "data per HH:MM" stamp. There is no cache in this stack, so use a table.
-- [ ] **Holding API:**
+- [x] **`RefreshHoldingViews`:** every 15 minutes, plus `POST /holding/refresh` rate-limited to once per minute. Store the last-refresh time for the "data per HH:MM" stamp. There is no cache in this stack, so use a table. — **Done:** worker schedule + `POST /holding/refresh` (429 + Retry-After), stamp in `dash_refreshes`.
+- [x] **Holding API:** — **Done:** `/holding/dashboard|summary|progress|procurement|finance|intake|alerts|export|refresh`.
   - `GET /holding/summary`, `/procurement`, `/progress`, `/finance`, `/alerts`, `/export`
   - filters: `companies[]`, site, from/to, employer, status
   - `companies[]` outside the caller's rights → empty
-- [ ] **`AlertService`,** computed from the MVs at request time: termin due ≤ 14 days, PO > 30 days, deviation < −10, vendor invoice overdue, contract ≤ 30 days left with actual < 95 %.
-- [ ] **Export:** a monthly summary PDF and an XLSX per panel. `exceljs` is already a dependency; PDF needs a decision (§6).
-- [ ] **Reconciliation test:** `SUM(mv) = SUM(table)` per company for all four views (LLD §10).
+- [x] **`AlertService`,** computed from the MVs at request time: termin due ≤ 14 days, PO > 30 days, deviation < −10, vendor invoice overdue, contract ≤ 30 days left with actual < 95 %. — **Done** (evaluated at refresh from the panel numbers; "termin siap diajukan" is a separate kind).
+- [ ] **Export:** a monthly summary PDF and an XLSX per panel. `exceljs` is already a dependency; PDF needs a decision (§6). — **Partly done:** XLSX with one sheet per panel (`GET /holding/export?format=xlsx`); the monthly PDF still needs the decision in §6.
+- [x] **Reconciliation test:** `SUM(mv) = SUM(table)` per company for all four views (LLD §10). — **Done:** the holding dashboard is asserted equal to the live company dashboard (same aggregation), on PGlite and on PostgreSQL 16.
 
 **Mockup coverage.** These are the panels in the holding mockup whose data the LLD does not yet define:
 
@@ -191,10 +191,10 @@ Built: `parseIdrCents` and `parseIndonesianDate` (MoneyParser/DateParser), `pars
   - every chat correction
   - every holding request (user, time, route, filters) via an `AuditHoldingAccess` middleware
   - Postgres triggers fit the RLS-first design and cannot be bypassed by forgotten app code.
-- [ ] **Scheduled jobs:** `DailyDigest` (07:00 WIB), `PurgeFailedIntakeTemp` (02:00), `BackupDatabase` (01:00, `pg_dump` to object storage, 30-day retention).
-- [ ] **Structured JSON logging** with `company_id`, `chat_id`, `message_id` and no photo content or account numbers. Today unhandled errors go to `console.error` (`app.ts:76`).
-- [ ] **Column-level PII control** for vendor bank account and NPWP (§5.8).
-- [ ] **`.env.example`:** add `TELEGRAM_*`, `OCR_*`, storage, `HOLDING_MV_REFRESH_MINUTES`, `INTAKE_QUALITY_MIN`, `INTAKE_TOTAL_CONFIDENCE_MIN` (LLD §9).
+- [x] **Scheduled jobs:** `DailyDigest` (07:00 WIB), `PurgeFailedIntakeTemp` (02:00), `BackupDatabase` (01:00, `pg_dump` to object storage, 30-day retention). — **Done:** refresh + DailyDigest + purge in the worker (`jobs.dedupe_key`); BackupDatabase as `scripts/backup-db.sh` from host cron (verified dump → restore).
+- [x] **Structured JSON logging** with `company_id`, `chat_id`, `message_id` and no photo content or account numbers. Today unhandled errors go to `console.error` (`app.ts:76`). — **Done** (`src/log.ts`, key-based redaction).
+- [x] **Column-level PII control** for vendor bank account and NPWP (§5.8). — **Partly done:** enforced in the API (vendor bank/NPWP read and write only by finance/managers; receipt NPWP only to them); column-level grants in Postgres are still open.
+- [x] **`.env.example`:** add `TELEGRAM_*`, `OCR_*`, storage, `HOLDING_MV_REFRESH_MINUTES`, `INTAKE_QUALITY_MIN`, `INTAKE_TOTAL_CONFIDENCE_MIN` (LLD §9). — **Done.**
 - [ ] **Deployment to the existing VPS:**
   - process manager for the API and worker
   - Postgres login role setup (`jiat_login`, a member of `jiat_app` and `jiat_holding`, not the owner)
