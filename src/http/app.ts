@@ -14,6 +14,8 @@ import { registerCompanyRoutes } from './routes/company.js';
 import { registerHoldingRoutes } from './routes/holding.js';
 import { registerIntakeRoutes } from './routes/intake.js';
 import { registerMemberRoutes } from './routes/members.js';
+import { registerProcurementRoutes } from './routes/procurement.js';
+import { registerProgressRoutes } from './routes/progress.js';
 import { registerTelegramWebhook } from './routes/telegram.js';
 import { registerVendorRoutes } from './routes/vendors.js';
 import { MANAGE_ROLES, requireRole } from './context.js';
@@ -104,6 +106,8 @@ export function createApp({
   registerCompanyRoutes(app, deps);
   registerVendorRoutes(app, deps);
   registerIntakeRoutes(app, deps, storage);
+  registerProcurementRoutes(app, deps);
+  registerProgressRoutes(app, deps);
 
   return app;
 }

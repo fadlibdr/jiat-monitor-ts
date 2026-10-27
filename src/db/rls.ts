@@ -38,6 +38,15 @@ const SITE_SCOPE: Record<TenantTable, string | null> = {
   intake_events: `jiat_site_allowed(site_id)`,
   attachments: `(site_id IS NULL OR jiat_site_allowed(site_id))`,
   vendor_invoices: `jiat_site_allowed(site_id)`,
+  document_sequences: null, // per company, no site dimension
+  purchase_requests: `jiat_site_allowed(site_id)`,
+  purchase_request_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM purchase_requests p WHERE p.id = pr_id))`,
+  purchase_orders: `jiat_site_allowed(site_id)`,
+  purchase_order_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM purchase_orders p WHERE p.id = po_id))`,
+  goods_receipts: `jiat_site_allowed(site_id)`,
+  goods_receipt_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM goods_receipts g WHERE g.id = gr_id))`,
+  progress_reports: `jiat_site_allowed(site_id)`,
+  progress_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM progress_reports r WHERE r.id = report_id))`,
 };
 
 export function rlsStatements(): string[] {

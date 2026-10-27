@@ -378,6 +378,145 @@ export interface IntakeReview {
   extracted?: { subtotalCents: number | null; ppnCents: number | null; itemsCents: number | null };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Phase 3 — procurement and progress (LLD §2)
+// ---------------------------------------------------------------------------------------------
+
+/** One counter per company, document type and year; incremented by an atomic upsert (docnumber.ts). */
+export const documentSequences = pgTable('document_sequences', {
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  docType: varchar('doc_type', { length: 10 }).notNull(),
+  year: integer('year').notNull(),
+  lastNumber: integer('last_number').notNull().default(0),
+  ...timestamps,
+}, (t) => [primaryKey({ columns: [t.companyId, t.docType, t.year] })]);
+
+export const PR_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'closed'] as const;
+export const purchaseRequests = pgTable('purchase_requests', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  contractId: bigint('contract_id', { mode: 'number' }).references(() => contracts.id),
+  number: varchar('number', { length: 40 }).notNull(),
+  requestedBy: bigint('requested_by', { mode: 'number' }),
+  neededBy: date('needed_by'),
+  status: varchar('status', { length: 12 }).notNull().default('draft').$type<(typeof PR_STATUSES)[number]>(),
+  note: text('note'),
+  decidedBy: bigint('decided_by', { mode: 'number' }),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  ...authorship,
+  ...timestamps,
+}, (t) => [uniqueIndex('purchase_requests_company_number').on(t.companyId, t.number), index('purchase_requests_company_status').on(t.companyId, t.status)]);
+
+export const purchaseRequestItems = pgTable('purchase_request_items', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  prId: bigint('pr_id', { mode: 'number' }).notNull().references(() => purchaseRequests.id, { onDelete: 'cascade' }),
+  boqItemId: bigint('boq_item_id', { mode: 'number' }).references(() => boqItems.id),
+  description: text('description').notNull(),
+  qty: numeric('qty', { precision: 18, scale: 4 }).notNull(),
+  unit: varchar('unit', { length: 20 }),
+  estPriceCents: bigint('est_price_cents', { mode: 'number' }),
+  ...timestamps,
+}, (t) => [index('purchase_request_items_pr').on(t.prId)]);
+
+/** draft → issued (approved by a manager, HLD §2) → partial / received by goods receipts; or cancelled. */
+export const PO_STATUSES = ['draft', 'issued', 'partial', 'received', 'cancelled'] as const;
+export const purchaseOrders = pgTable('purchase_orders', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  vendorId: bigint('vendor_id', { mode: 'number' }).notNull().references(() => vendors.id),
+  prId: bigint('pr_id', { mode: 'number' }).references(() => purchaseRequests.id),
+  contractId: bigint('contract_id', { mode: 'number' }).references(() => contracts.id),
+  number: varchar('number', { length: 40 }).notNull(),
+  orderDate: date('order_date').notNull(),
+  expectedDate: date('expected_date'),
+  ppnRateBp: integer('ppn_rate_bp').notNull().default(1100),
+  /** snapshot of Σ line amounts at write time, server-computed, never client-provided */
+  dppCents: bigint('dpp_cents', { mode: 'number' }).notNull().default(0),
+  ppnCents: bigint('ppn_cents', { mode: 'number' }).notNull().default(0),
+  totalCents: bigint('total_cents', { mode: 'number' }).notNull().default(0),
+  status: varchar('status', { length: 12 }).notNull().default('draft').$type<(typeof PO_STATUSES)[number]>(),
+  approvedBy: bigint('approved_by', { mode: 'number' }),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  note: text('note'),
+  ...authorship,
+  ...timestamps,
+}, (t) => [
+  uniqueIndex('purchase_orders_company_number').on(t.companyId, t.number),
+  index('purchase_orders_vendor').on(t.vendorId),
+  index('purchase_orders_company_status').on(t.companyId, t.status),
+]);
+
+export const purchaseOrderItems = pgTable('purchase_order_items', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  poId: bigint('po_id', { mode: 'number' }).notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  prItemId: bigint('pr_item_id', { mode: 'number' }).references(() => purchaseRequestItems.id),
+  boqItemId: bigint('boq_item_id', { mode: 'number' }).references(() => boqItems.id),
+  description: text('description').notNull(),
+  qty: numeric('qty', { precision: 18, scale: 4 }).notNull(),
+  unit: varchar('unit', { length: 20 }),
+  unitPriceCents: bigint('unit_price_cents', { mode: 'number' }).notNull(),
+  amountCents: bigint('amount_cents', { mode: 'number' }).notNull(),
+  ...timestamps,
+}, (t) => [index('purchase_order_items_po').on(t.poId), index('purchase_order_items_boq').on(t.boqItemId)]);
+
+export const goodsReceipts = pgTable('goods_receipts', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  /** copied from the PO, so the site scope applies without a join */
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  poId: bigint('po_id', { mode: 'number' }).notNull().references(() => purchaseOrders.id),
+  number: varchar('number', { length: 40 }).notNull(),
+  receivedAt: date('received_at').notNull(),
+  receivedBy: bigint('received_by', { mode: 'number' }),
+  note: text('note'),
+  ...authorship,
+  ...timestamps,
+}, (t) => [uniqueIndex('goods_receipts_company_number').on(t.companyId, t.number), index('goods_receipts_po').on(t.poId)]);
+
+export const goodsReceiptItems = pgTable('goods_receipt_items', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  grId: bigint('gr_id', { mode: 'number' }).notNull().references(() => goodsReceipts.id, { onDelete: 'cascade' }),
+  poItemId: bigint('po_item_id', { mode: 'number' }).notNull().references(() => purchaseOrderItems.id),
+  qtyReceived: numeric('qty_received', { precision: 18, scale: 4 }).notNull(),
+  note: text('note'),
+  ...timestamps,
+}, (t) => [index('goods_receipt_items_gr').on(t.grId), index('goods_receipt_items_po_item').on(t.poItemId)]);
+
+/** Opname per contract per month: draft/rejected → submitted → approved by a manager (HLD §2). */
+export const PROGRESS_STATUSES = ['draft', 'submitted', 'approved', 'rejected'] as const;
+export const progressReports = pgTable('progress_reports', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  contractId: bigint('contract_id', { mode: 'number' }).notNull().references(() => contracts.id),
+  /** first day of the month */
+  period: date('period').notNull(),
+  reportedBy: bigint('reported_by', { mode: 'number' }),
+  approvedBy: bigint('approved_by', { mode: 'number' }),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  status: varchar('status', { length: 12 }).notNull().default('draft').$type<(typeof PROGRESS_STATUSES)[number]>(),
+  note: text('note'),
+  ...authorship,
+  ...timestamps,
+}, (t) => [uniqueIndex('progress_reports_contract_period').on(t.contractId, t.period), index('progress_reports_company_status').on(t.companyId, t.status)]);
+
+export const progressItems = pgTable('progress_items', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  reportId: bigint('report_id', { mode: 'number' }).notNull().references(() => progressReports.id, { onDelete: 'cascade' }),
+  boqItemId: bigint('boq_item_id', { mode: 'number' }).notNull().references(() => boqItems.id),
+  /** cumulative quantity done to date, when the item has a quantity */
+  qtyDone: numeric('qty_done', { precision: 18, scale: 4 }),
+  /** cumulative % of the item complete at the end of the period, micro-percent (100 % = 100_000_000) */
+  cumulativeMicroPct: bigint('cumulative_micro_pct', { mode: 'number' }).notNull(),
+  ...timestamps,
+}, (t) => [uniqueIndex('progress_items_report_item').on(t.reportId, t.boqItemId)]);
+
 /**
  * Background jobs (LLD §9), Postgres-backed so the pilot needs no Redis. Not a tenant table: the
  * worker claims across companies, and every job carries company_id explicitly (LLD §3); handlers
@@ -422,4 +561,6 @@ export const auditLogs = pgTable('audit_logs', {
 export const TENANT_TABLES = [
   'sites', 'contracts', 'contract_addendums', 'contract_terms', 'boq_versions', 'boq_items', 'boq_schedules',
   'vendors', 'intake_events', 'attachments', 'vendor_invoices',
+  'document_sequences', 'purchase_requests', 'purchase_request_items', 'purchase_orders', 'purchase_order_items',
+  'goods_receipts', 'goods_receipt_items', 'progress_reports', 'progress_items',
 ] as const;

@@ -24,6 +24,8 @@ export const AUDITED_TABLES = [
   'companies', 'company_users', 'management_viewers', 'telegram_chats',
   'sites', 'contracts', 'contract_addendums', 'contract_terms', 'boq_versions',
   'vendors', 'vendor_invoices',
+  'purchase_requests', 'purchase_request_items', 'purchase_orders', 'purchase_order_items',
+  'goods_receipts', 'goods_receipt_items', 'progress_reports', 'progress_items',
 ] as const;
 
 /** Every table with a created_by column gets the stamp trigger: derived, so a new table cannot be forgotten. */
