@@ -1,8 +1,8 @@
 import ExcelJS from 'exceljs';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BoqImportError } from '../../src/boq/errors.js';
-import { importBoq, leafWeights, MICRO_PCT_TOTAL } from '../../src/boq/importer.js';
+import { importBoq, itemCategories, leafWeights, MICRO_PCT_TOTAL } from '../../src/boq/importer.js';
 import { boqItems, boqVersions, companies, contractAddendums, contracts, sites } from '../../src/db/schema.js';
 import { withApp, withCompany, type Db } from '../../src/db/tenant.js';
 import { createTestDb } from '../helpers/db.js';
@@ -178,3 +178,38 @@ describe('leafWeights', () => {
 
 let RAPI_BUFFER: Buffer;
 beforeAll(async () => { RAPI_BUFFER = await workbook(RAPI); });
+
+describe('BOQ item categories (cost-by-category panels)', () => {
+  const item = (code: string, description: string, parentIdx: number | null) => ({ code, description, parentIdx });
+
+  it('itemCategories: own keywords first, then the nearest section, null when nothing or two categories match', () => {
+    const items = [
+      item('I', 'PEKERJAAN SUBKON PENGEBORAN', null),
+      item('I.1', 'Bor 100 m', 0), // inherits subkon from the section
+      item('I.2', 'Pipa casing PVC 6"', 0), // own keyword wins: material
+      item('II', 'PEKERJAAN UMUM', null),
+      item('II.1', 'Mobilisasi', 3), // nothing anywhere
+      item('II.2', 'Sewa excavator dan semen', 3), // alat and material: ambiguous → section (none) → null
+    ];
+    expect(itemCategories(items, new Map())).toEqual(['subkon', 'subkon', 'material', null, null, null]);
+  });
+
+  it('a category from the previous version (by code) wins over keywords', () => {
+    expect(itemCategories([item('I.2', 'Pipa casing', null)], new Map([['I.2', 'subkon' as const]]))).toEqual(['subkon']);
+  });
+
+  it('import sets categories, and a manual correction survives a re-import of the same code', async () => {
+    const cid = await contractIn(companyA, RAPI_TOTAL_CENTS);
+    const v1 = await withCompany(db, companyA, (tx) => importBoq(tx, cid, RAPI_BUFFER));
+    const items1 = await withCompany(db, companyA, (tx) => tx.select().from(boqItems).where(eq(boqItems.versionId, v1.versionId)));
+    const cat = (rows: typeof items1, code: string) => rows.find((r) => r.code === code)!.category;
+    expect(cat(items1, 'II.A.2')).toBe('material'); // "Casing"
+    expect(cat(items1, 'II.A.1')).toBeNull(); // "Bor 100 m": no keyword, no categorised section
+
+    await withCompany(db, companyA, (tx) => tx.update(boqItems).set({ category: 'subkon' })
+      .where(and(eq(boqItems.versionId, v1.versionId), eq(boqItems.code, 'II.A.1'))));
+    const v2 = await withCompany(db, companyA, (tx) => importBoq(tx, cid, RAPI_BUFFER));
+    const items2 = await withCompany(db, companyA, (tx) => tx.select().from(boqItems).where(eq(boqItems.versionId, v2.versionId)));
+    expect([cat(items2, 'II.A.1'), cat(items2, 'II.A.2')]).toEqual(['subkon', 'material']);
+  });
+});

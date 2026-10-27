@@ -101,6 +101,18 @@ describe('procurement: PR → PO → partial GR', () => {
   });
 });
 
+describe('BOQ item category correction', () => {
+  it('project_admin corrects a category (200); site_staff 403; an unknown item 404; null clears it', async () => {
+    const path = (id: number) => `/contracts/${K}/boq/items/${id}`;
+    expect((await call(staff, 'PATCH', path(leafSub), { category: 'alat' })).status).toBe(403);
+    expect(await ok(call(adm, 'PATCH', path(leafSub), { category: 'alat' }))).toMatchObject({ id: leafSub, category: 'alat' });
+    expect((await call(adm, 'PATCH', path(leafSub + 999), { category: 'alat' })).status).toBe(404);
+    expect((await call(adm, 'PATCH', path(leafSub), { category: 'makanan' })).status).toBe(400);
+    expect(await ok(call(adm, 'PATCH', path(leafSub), { category: null }))).toMatchObject({ category: null });
+    await ok(call(adm, 'PATCH', path(leafSub), { category: 'subkon' })); // back to the seeded value for the panels below
+  });
+});
+
 describe('progress: plan + approved opname → S-curve', () => {
   it('weights the leaves: Sep plan 40 %, actual 34 %', async () => {
     await ok(call(mgr, 'PUT', `/contracts/${K}/boq/schedule`, [

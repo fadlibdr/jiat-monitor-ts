@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { importBoq } from '../../boq/importer.js';
+import { CATEGORIES } from '../../domain/categories.js';
 import { boqItems, boqVersions, contractAddendums, contracts, contractTerms, sites } from '../../db/schema.js';
 import { withCompany, type Tx } from '../../db/tenant.js';
 import { daysLeft, effectiveContract, validateTerms } from '../../domain/contract.js';
@@ -10,6 +11,8 @@ import {
 } from '../context.js';
 
 const ImportQuery = z.object({ sheet: z.string().min(1).max(64).default('RAB') });
+const BoqItemParams = z.object({ companyId: IdParam, contractId: IdParam, itemId: IdParam });
+const BoqItemPatch = z.object({ category: z.enum(CATEGORIES).nullable() });
 const SiteParams = z.object({ companyId: IdParam, siteId: IdParam });
 
 const SiteBody = z.object({
@@ -209,6 +212,22 @@ export function registerCompanyRoutes(app: App, { db, maxUploadBytes, now }: Rou
     });
     if (!result) notFound('Belum ada BOQ untuk kontrak ini.');
     return c.json({ data: result });
+  });
+  /** Corrects the cost category of an item of the CURRENT version; kept by code on later re-imports. */
+  app.patch('/companies/:companyId/contracts/:contractId/boq/items/:itemId', requireRole(EDIT_ROLES), async (c) => {
+    const { contractId, itemId } = BoqItemParams.parse(c.req.param());
+    const { category } = await jsonBody(c, BoqItemPatch);
+    const row = await withCompany(db, c.get('tenant'), async (tx) => {
+      await findContract(tx, contractId);
+      const [current] = await tx.select({ id: boqVersions.id }).from(boqVersions)
+        .where(and(eq(boqVersions.contractId, contractId), eq(boqVersions.isCurrent, true)));
+      if (!current) return null;
+      const [updated] = await tx.update(boqItems).set({ category })
+        .where(and(eq(boqItems.id, itemId), eq(boqItems.versionId, current.id))).returning();
+      return updated ?? null;
+    });
+    if (!row) notFound('Item BOQ tidak ditemukan pada versi aktif kontrak ini.');
+    return c.json({ data: row });
   });
 }
 
