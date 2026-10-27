@@ -34,7 +34,9 @@ export interface ImportOptions {
  * looked up through RLS, so a contract of another company simply does not exist here (SEC-AUTHZ).
  */
 export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: ImportOptions = {}): Promise<ImportSummary> {
-  const contract = await tx.query.contracts.findFirst({ where: eq(contracts.id, contractId) });
+  // the contract row is the BOQ's lock: a category correction (PATCH …/boq/items/:id) takes it too,
+  // so it either lands before this import reads the categories to carry over, or after it, on the new version
+  const [contract] = await tx.select().from(contracts).where(eq(contracts.id, contractId)).for('no key update');
   if (!contract) throw new BoqImportError('Kontrak tidak ditemukan pada perusahaan aktif.', 'foreign_contract', { contractId });
   // an addendum normally comes with a revised RAB: the BOQ must match the DPP in force, not the original
   const addendums = await tx.select().from(contractAddendums).where(eq(contractAddendums.contractId, contract.id));

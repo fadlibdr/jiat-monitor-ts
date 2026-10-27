@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { ppnOf } from '../domain/contract.js';
 import { lineAmountCents, parseQty, qtyToString, receiptStatus } from '../domain/quantity.js';
@@ -160,8 +160,15 @@ export async function approvePo(tx: Tx, poId: number, userId: number) {
 export async function cancelPo(tx: Tx, poId: number) {
   const [row] = await tx.update(purchaseOrders).set({ status: 'cancelled' })
     .where(and(eq(purchaseOrders.id, poId), inArray(purchaseOrders.status, ['draft', 'issued']))).returning();
-  if (row) return row;
-  return conflictOrMissing(tx, poId, 'batal hanya dari draft/issued tanpa penerimaan');
+  if (!row) return conflictOrMissing(tx, poId, 'batal hanya dari draft/issued tanpa penerimaan');
+  // the PR was closed when this PO was made from it: with no other live PO it is approved again,
+  // so a corrected PO can be made from it instead of requesting and approving everything anew
+  if (row.prId !== null) {
+    const [other] = await tx.select({ id: purchaseOrders.id }).from(purchaseOrders)
+      .where(and(eq(purchaseOrders.prId, row.prId), ne(purchaseOrders.status, 'cancelled'))).limit(1);
+    if (!other) await tx.update(purchaseRequests).set({ status: 'approved' }).where(and(eq(purchaseRequests.id, row.prId), eq(purchaseRequests.status, 'closed')));
+  }
+  return row;
 }
 
 async function conflictOrMissing(tx: Tx, poId: number, rule: string): Promise<never> {

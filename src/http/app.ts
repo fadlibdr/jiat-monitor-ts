@@ -81,6 +81,9 @@ export function createApp({
       // a value the column cannot hold (too long, bad encoding/NUL, not a number): the request, not the server
       case '22001': case '22021': case '22P02': case '22003':
         return c.json({ error: 'invalid_request', message: 'Nilai tidak valid atau terlalu panjang.' }, 400);
+      // two writes to the same documents at the same moment; Postgres rolled this one back whole
+      case '40P01': case '40001':
+        return c.json({ error: 'conflict', message: 'Data sedang diubah bersamaan; coba lagi.' }, 409);
     }
     // errorText: the database's reason, never Drizzle's SQL + bound parameters (row data such as a
     // vendor's bank account must not reach the logs, LLD §9)

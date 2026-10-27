@@ -219,6 +219,9 @@ export function registerCompanyRoutes(app: App, { db, maxUploadBytes, now }: Rou
     const { category } = await jsonBody(c, BoqItemPatch);
     const row = await withCompany(db, c.get('tenant'), async (tx) => {
       await findContract(tx, contractId);
+      // same lock as importBoq: a re-import running now finishes first, and an id of the version it
+      // replaced is then a 404 instead of a correction silently left on the superseded version
+      await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, contractId)).for('no key update');
       const [current] = await tx.select({ id: boqVersions.id }).from(boqVersions)
         .where(and(eq(boqVersions.contractId, contractId), eq(boqVersions.isCurrent, true)));
       if (!current) return null;

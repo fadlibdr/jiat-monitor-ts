@@ -127,8 +127,12 @@ alur PR → tagihan → dashboard holding sebagai `jiat_app` tanpa BYPASSRLS, da
 - **Purge 02:00 WIB**: berkas foto > 24 jam tanpa baris `attachments` (sisa crash), berkas `.tmp`, job selesai > 30 hari,
   job gagal > 90 hari.
 - **Backup 01:00 WIB**: `scripts/backup-db.sh` dari cron host, **bukan** worker — `pg_dump` harus membaca semua perusahaan,
-  hak yang tidak boleh dimiliki worker. Password di `~/.pgpass` (skrip menolak URL berpassword); `BACKUP_RCLONE_REMOTE` opsional
-  untuk salinan di luar server. Restore ke server baru: buat role `jiat_app`/`jiat_holding` dulu (`db:migrate` di DB kosong), lalu `pg_restore`.
+  hak yang tidak boleh dimiliki worker. Perannya harus `BYPASSRLS` (role `jiat_backup` di atas; pemilik tabel tidak cukup
+  karena FORCE RLS — skrip memeriksa sebelum dump). Password di `~/.pgpass` (skrip menolak password dalam bentuk apa pun di URL).
+  `BACKUP_RCLONE_REMOTE` opsional untuk salinan di luar server, **hanya terenkripsi**: `BACKUP_GPG_RECIPIENT` (kunci publik gpg,
+  kunci privat disimpan offline) atau `BACKUP_REMOTE_ENCRYPTED=1` (remote rclone crypt). Data `sessions`, `verifications`,
+  `telegram_link_codes` tidak ikut di-dump. Restore ke server baru: buat role `jiat_app`/`jiat_holding` dulu (`db:migrate` di DB
+  kosong), lalu `pg_restore` (salinan `.gpg`: `gpg --decrypt` dulu).
 - **Log**: satu objek JSON per baris di stdout (`http_request`, `unhandled`, `job_failed`, …) dengan id perusahaan/pengguna/chat;
   nilai di bawah kunci sensitif diganti `[redacted]`, galat database dilaporkan tanpa parameter SQL.
 

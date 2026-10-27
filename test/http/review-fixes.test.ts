@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { headerAuthenticator } from '../../src/auth/authenticator.js';
 import { companies, companyUsers, payments, sites, users, vendorInvoices, vendors } from '../../src/db/schema.js';
@@ -6,7 +6,7 @@ import { withApp, withCompany, type Db } from '../../src/db/tenant.js';
 import type { Panels } from '../../src/dashboard/panels.js';
 import { createApp } from '../../src/http/app.js';
 import { DEFAULT_PAYMENT_TERMS_DAYS, trustedSplit } from '../../src/intake/review.js';
-import { createTestDb } from '../helpers/db.js';
+import { asOwner, createTestDb } from '../helpers/db.js';
 
 /**
  * The review-round fixes seen through the API: a confirmed nota gets a due date (so payables can be
@@ -155,6 +155,50 @@ describe('Idempotency-Key on payments', () => {
     expect(list[0]).not.toHaveProperty('idempotencyKey');
     expect(await ok(call(mgr, 'GET', '/payments?payableType=vendor_invoices&rowRef=00000000-0000-4000-8000-000000000000'))).toEqual([]);
     expect((await call(mgr, 'GET', `/payments?rowRef=${vi!.rowId}`)).status).toBe(400);
+  });
+});
+
+describe('purchase requests and document numbers', () => {
+  it('cancelling the PO made from a PR approves the PR again, so a corrected PO can be made from it', async () => {
+    const pr = await ok<{ id: number }>(call(adm, 'POST', '/purchase-requests', { siteId: s1, items: [{ description: 'Pipa 4"', qty: 10, unit: 'btg' }] }), 201);
+    await ok(call(adm, 'POST', `/purchase-requests/${pr.id}/submit`));
+    await ok(call(mgr, 'POST', `/purchase-requests/${pr.id}/approve`));
+    const poBody = { siteId: s1, prId: pr.id, vendorId: plainVendor, orderDate: '2026-10-10', items: [{ description: 'Pipa 4"', qty: 10, unit: 'btg', unitPriceCents: 1 }] };
+    const wrong = await ok<{ id: number }>(call(adm, 'POST', '/purchase-orders', poBody), 201);
+    expect((await ok<{ status: string }>(call(adm, 'GET', `/purchase-requests/${pr.id}`))).status).toBe('closed');
+    await ok(call(mgr, 'POST', `/purchase-orders/${wrong.id}/cancel`));
+    expect((await ok<{ status: string }>(call(adm, 'GET', `/purchase-requests/${pr.id}`))).status).toBe('approved');
+    await ok(call(adm, 'POST', '/purchase-orders', { ...poBody, items: [{ ...poBody.items[0]!, unitPriceCents: 250_000 * RP }] }), 201);
+    expect((await ok<{ status: string }>(call(adm, 'GET', `/purchase-requests/${pr.id}`))).status).toBe('closed');
+  });
+
+  it('a 12-character company prefix with a 20-character site code still makes a valid number (was varchar(40))', async () => {
+    await withApp(db, (tx) => tx.update(companies).set({ docPrefix: 'PTJAYAINDAH1' }).where(eq(companies.id, A)));
+    const [long] = await withCompany(db, A, (tx) => tx.insert(sites).values({ companyId: A, code: 'TOL-CIPALI-SEKSI-3AB', name: 'Seksi 3' }).returning({ id: sites.id }));
+    const pr = await ok<{ number: string }>(call(adm, 'POST', '/purchase-requests', { siteId: long!.id, items: [{ description: 'x', qty: 1 }] }), 201);
+    // the sequence is per company, type and year: earlier tests of this file made PRs too
+    expect(pr.number).toMatch(/^PTJAYAINDAH1\/PR\/TOL-CIPALI-SEKSI-3AB\/2026\/\d{3}$/);
+    expect(pr.number.length).toBeGreaterThan(40);
+  });
+});
+
+describe('concurrent writes', () => {
+  it('a deadlock or serialization failure is a 409 "coba lagi", not a 500', async () => {
+    await asOwner(db, async () => {
+      await db.execute(sql.raw(`CREATE FUNCTION zz_deadlock() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'deadlock detected' USING ERRCODE = '40P01'; END $$`));
+      await db.execute(sql.raw('CREATE TRIGGER zz_deadlock BEFORE INSERT ON vendors FOR EACH ROW EXECUTE FUNCTION zz_deadlock()'));
+    });
+    try {
+      const res = await call(mgr, 'POST', '/vendors', { name: 'CV Bersamaan' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { message: string }).message).toMatch(/coba lagi/);
+    } finally {
+      await asOwner(db, async () => {
+        await db.execute(sql.raw('DROP TRIGGER zz_deadlock ON vendors'));
+        await db.execute(sql.raw('DROP FUNCTION zz_deadlock()'));
+      });
+    }
   });
 });
 
