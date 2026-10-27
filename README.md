@@ -51,7 +51,7 @@ test/              144 test (unit domain, parser, importer & RLS tenancy di PGli
 
 ```bash
 npm install
-npm test            # 119 test, tanpa Postgres eksternal (PGlite)
+npm test            # 144 test, tanpa Postgres eksternal (PGlite)
 npm run typecheck
 npm run build
 
@@ -86,6 +86,8 @@ Baca: semua anggota. Buat site/kontrak/impor BOQ: `project_admin`+. Kelola anggo
 Semua `/companies/:companyId/*` → `401` tanpa principal, `403` bila bukan anggota perusahaan tersebut (termasuk holding viewer), `400` id tidak valid.
 
 ## Belum ada (urutan berikutnya)
+
+Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding: [`docs/remaining-work.md`](docs/remaining-work.md).
 
 1. Intake Fase 2: webhook WhatsApp/Telegram, job OCR, `vendor_invoices`, V8–V10 (sha256/pHash/trigram) — `hamming.ts` dan `receipt-validator.ts` sudah siap dipakai.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
