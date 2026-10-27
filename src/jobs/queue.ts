@@ -57,6 +57,20 @@ export async function enqueue(tx: Tx, spec: JobSpec): Promise<number> {
   return row!.id;
 }
 
+/** Enqueues unless a job with this dedupe key already exists (done, failed or pending). True when inserted. */
+export async function enqueueOnce(tx: Tx, spec: JobSpec & { dedupeKey: string }): Promise<boolean> {
+  if (spec.companyId === undefined) throw new Error(`job ${spec.kind}: company_id wajib (null untuk job sistem).`);
+  const rows = await tx.insert(jobs).values({
+    kind: spec.kind,
+    companyId: spec.companyId,
+    payload: spec.payload ?? {},
+    dedupeKey: spec.dedupeKey,
+    ...(spec.runAt ? { runAt: spec.runAt } : {}),
+    ...(spec.maxAttempts ? { maxAttempts: spec.maxAttempts } : {}),
+  }).onConflictDoNothing({ target: jobs.dedupeKey }).returning({ id: jobs.id });
+  return rows.length > 0;
+}
+
 /** Takes the oldest due job, or null. Increments attempts as part of the claim. */
 export async function claimNext(db: Db, workerId: string): Promise<Job | null> {
   const [row] = await withApp(db, (tx) =>

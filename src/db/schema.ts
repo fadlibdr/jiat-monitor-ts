@@ -700,6 +700,8 @@ export const jobs = pgTable('jobs', {
   lastError: text('last_error'),
   /** jobs with the same key run one at a time, in id order (e.g. corrections of one chat) */
   serialKey: text('serial_key'),
+  /** at most one job per key, ever: a scheduled slot ("dashboard.refresh@2026-10-27T07:15Z") is enqueued once by any number of workers */
+  dedupeKey: varchar('dedupe_key', { length: 120 }).unique(),
   doneAt: timestamp('done_at', { withTimezone: true }),
   failedAt: timestamp('failed_at', { withTimezone: true }),
   ...timestamps,
@@ -707,6 +709,21 @@ export const jobs = pgTable('jobs', {
   index('jobs_due').on(t.runAt).where(sql`done_at IS NULL AND failed_at IS NULL`),
   index('jobs_serial_open').on(t.serialKey, t.id).where(sql`serial_key IS NOT NULL AND done_at IS NULL AND failed_at IS NULL`),
 ]);
+
+/**
+ * DailyDigest ledger (LLD §9): one row per company and WIB day. The alerts already reported let the
+ * next digest say what is NEW; sent_at is set after delivery, so a retried job resends only a
+ * digest that never went out.
+ */
+export const dailyDigests = pgTable('daily_digests', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  digestDate: date('digest_date').notNull(),
+  alertKeys: jsonb('alert_keys').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  recipients: integer('recipients').notNull().default(0),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+  ...timestamps,
+}, (t) => [uniqueIndex('daily_digests_company_date').on(t.companyId, t.digestDate)]);
 
 /**
  * Append-only. The app role has no INSERT/UPDATE/DELETE grant: rows are written only by the
@@ -733,5 +750,5 @@ export const TENANT_TABLES = [
   'vendors', 'intake_events', 'attachments', 'vendor_invoices',
   'document_sequences', 'purchase_requests', 'purchase_request_items', 'purchase_orders', 'purchase_order_items',
   'goods_receipts', 'goods_receipt_items', 'progress_reports', 'progress_items',
-  'sales_invoices', 'payments', 'dash_contracts', 'dash_progress', 'dash_monthly', 'dash_balances', 'dash_vendors', 'dash_alerts', 'dash_refreshes',
+  'sales_invoices', 'payments', 'dash_contracts', 'dash_progress', 'dash_monthly', 'dash_balances', 'dash_vendors', 'dash_alerts', 'dash_refreshes', 'daily_digests',
 ] as const;
