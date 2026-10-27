@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { rlsStatements } from './rls.js';
+import { postMigrationStatements } from './ddl.js';
 
 async function main(): Promise<void> {
   const url = process.env['DATABASE_URL_MIGRATE'] ?? process.env['DATABASE_URL'];
@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   const db = drizzle(client);
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
-    for (const stmt of rlsStatements()) await db.execute(sql.raw(stmt));
+    for (const stmt of postMigrationStatements()) await db.execute(sql.raw(stmt));
     // The API's login role must run as jiat_app by default (RLS applies to it, grants exist for it)
     // and be allowed to SET LOCAL ROLE jiat_holding. Role name from env; never hard-coded.
     const loginRole = process.env['DATABASE_APP_LOGIN_ROLE'];

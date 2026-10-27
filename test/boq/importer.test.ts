@@ -3,7 +3,7 @@ import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BoqImportError } from '../../src/boq/errors.js';
 import { importBoq, leafWeights, MICRO_PCT_TOTAL } from '../../src/boq/importer.js';
-import { boqItems, boqVersions, companies, contracts, sites } from '../../src/db/schema.js';
+import { boqItems, boqVersions, companies, contractAddendums, contracts, sites } from '../../src/db/schema.js';
 import { withApp, withCompany, type Db } from '../../src/db/tenant.js';
 import { createTestDb } from '../helpers/db.js';
 
@@ -86,6 +86,17 @@ describe('importBoq', () => {
     expect((err as BoqImportError).message).toContain('selisih -1.00');
     const versions = await withCompany(db, companyA, (tx) => tx.select().from(boqVersions).where(eq(boqVersions.contractId, cid)));
     expect(versions).toEqual([]);
+  });
+
+  it('after an addendum the RAB must match the effective DPP (original + Σ deltas), not the original', async () => {
+    const cid = await contractIn(companyA, 10_000_00);
+    await withCompany(db, companyA, (tx) =>
+      tx.insert(contractAddendums).values({ companyId: companyA, contractId: cid, number: 'ADD-1', signedAt: '2026-09-01', valueDeltaCents: 2_000_00 }));
+    const original = await workbook([['1', 'Item', 'm', 10, 1000, 10_000]]);
+    await expect(withCompany(db, companyA, (tx) => importBoq(tx, cid, original))).rejects.toMatchObject({ code: 'total_mismatch' });
+    const revised = await workbook([['1', 'Item', 'm', 12, 1000, 12_000]]);
+    const sum = await withCompany(db, companyA, (tx) => importBoq(tx, cid, revised));
+    expect(sum).toMatchObject({ total: '12000.00', contractValueDpp: '12000.00', diff: '0.00' });
   });
 
   it('re-import creates version 2 and keeps version 1 (ids stable, only is_current flips)', async () => {
