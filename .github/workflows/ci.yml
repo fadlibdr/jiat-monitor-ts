@@ -1,0 +1,37 @@
+name: CI
+
+# LLD §10: unit + feature tests on every push. The suite needs no external Postgres
+# (PGlite runs Postgres in WASM, so RLS, triggers and policies are exercised for real).
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Migrations match the schema
+        run: |
+          npx drizzle-kit generate --name ci_drift_check
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::src/db/schema.ts changed without a committed migration: run npm run db:generate"
+            git status --porcelain drizzle
+            exit 1
+          fi

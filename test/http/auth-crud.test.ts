@@ -1,6 +1,8 @@
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { betterAuthAuthenticator, createAuth, type Auth } from '../../src/auth/better-auth.js';
-import type { Db } from '../../src/db/tenant.js';
+import { users } from '../../src/db/schema.js';
+import { withApp, type Db } from '../../src/db/tenant.js';
 import { createApp } from '../../src/http/app.js';
 import { createTestDb } from '../helpers/db.js';
 
@@ -98,6 +100,18 @@ describe('Better Auth integration', () => {
     expect((await post('/api/auth/sign-in/email', {})).status).toBe(400);
   });
 
+  it('sign-in is rate limited per client IP: 5 attempts a minute, the 6th is 429; another IP is unaffected', async () => {
+    const limited = createAuth(db, { secret: SECRET, baseURL: BASE, secureCookies: false, rateLimit: true });
+    const limitedApp = createApp({ db, auth: betterAuthAuthenticator(limited), betterAuth: limited });
+    const attempt = (ip: string) => limitedApp.request('/api/auth/sign-in/email', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: BASE, 'x-forwarded-for': ip },
+      body: JSON.stringify({ email: 'alice@a.test', password: 'wrong-password-123' }),
+    });
+    for (let i = 0; i < 5; i++) expect((await attempt('203.0.113.77')).status).toBe(401);
+    expect((await attempt('203.0.113.77')).status).toBe(429);
+    expect((await attempt('203.0.113.78')).status).toBe(401);
+  });
+
   it('sign-up is disabled by default (allowSignUp false)', async () => {
     const closedAuth = createAuth(db, { secret: SECRET, baseURL: BASE, secureCookies: false });
     const closedApp = createApp({ db, auth: betterAuthAuthenticator(closedAuth), betterAuth: closedAuth });
@@ -120,19 +134,23 @@ describe('company / site / contract / member CRUD with role authorization', () =
       method: 'POST', headers: { 'content-type': 'application/json', origin: BASE },
       body: JSON.stringify({ email: 'bob@b.test', password: 'bob-password-12345', name: 'Bob' }),
     });
+    // HLD §2: companies are created by the (global) system admin; alice is one, bob is not
+    await withApp(db, (tx) => tx.update(users).set({ isSystemAdmin: true }).where(eq(users.email, 'alice@a.test')));
     alice = await signIn('alice@a.test', 'alice-password-123');
     bob = await signIn('bob@b.test', 'bob-password-12345');
   });
 
-  it('POST /companies: founder becomes company_manager; code validated; duplicate code is 409', async () => {
-    const bad = await app.request('/companies', json(alice, { code: 'lower', name: 'X' }));
+  it('POST /admin/companies: system admin only; managerEmail becomes company_manager; the admin alone is not a member; duplicate is 409', async () => {
+    expect((await app.request('/admin/companies', json(bob, { code: 'PII', name: 'PT Pelita Inovasi Internusa' }))).status).toBe(403);
+    const bad = await app.request('/admin/companies', json(alice, { code: 'lower', name: 'X' }));
     expect(bad.status).toBe(400);
-    const res = await app.request('/companies', json(alice, { code: 'PII', name: 'PT Pelita Inovasi Internusa' }));
+    const res = await app.request('/admin/companies', json(alice, { code: 'PII', name: 'PT Pelita Inovasi Internusa', managerEmail: 'alice@a.test' }));
     expect(res.status).toBe(201);
     companyId = ((await res.json()) as { data: { id: number } }).data.id;
+    expect((await app.request('/admin/companies', json(alice, { code: 'XYZ', name: 'PT Tanpa Manajer' }))).status).toBe(201);
     const me = (await (await app.request('/me/companies', json(alice))).json()) as { data: Array<{ id: number; role: string }> };
     expect(me.data).toEqual([{ id: companyId, code: 'PII', name: 'PT Pelita Inovasi Internusa', role: 'company_manager' }]);
-    expect((await app.request('/companies', json(bob, { code: 'PII', name: 'Dup' }))).status).toBe(409);
+    expect((await app.request('/admin/companies', json(alice, { code: 'PII', name: 'Dup' }))).status).toBe(409);
   });
 
   it('non-member bob gets 403 on every company route; manager alice adds bob as site_staff', async () => {
@@ -145,15 +163,18 @@ describe('company / site / contract / member CRUD with role authorization', () =
     expect(list.data.map((m) => [m.email, m.role]).sort()).toEqual([['alice@a.test', 'company_manager'], ['bob@b.test', 'site_staff']]);
   });
 
-  it('site_staff may read but not create sites/contracts/members (403); manager may', async () => {
+  it('site_staff may not create sites/members (403) and sees only the sites assigned via siteIds (none until assigned); manager may create', async () => {
     expect((await app.request(`/companies/${companyId}/sites`, json(bob, { code: 'KRM', name: 'Keerom' }))).status).toBe(403);
     expect((await app.request(`/companies/${companyId}/members`, json(bob, { email: 'alice@a.test', role: 'site_staff' }))).status).toBe(403);
     const site = await app.request(`/companies/${companyId}/sites`, json(alice, { code: 'KRM', name: 'Keerom', province: 'Papua', startDate: '2026-01-10' }));
     expect(site.status).toBe(201);
     siteId = ((await site.json()) as { data: { id: number } }).data.id;
     expect((await app.request(`/companies/${companyId}/sites`, json(alice, { code: 'KRM', name: 'Dup' }))).status).toBe(409);
-    const seenByBob = (await (await app.request(`/companies/${companyId}/sites`, json(bob))).json()) as { data: Array<{ code: string }> };
-    expect(seenByBob.data.map((s) => s.code)).toEqual(['KRM']);
+    const sitesOf = async (cookie: string) =>
+      ((await (await app.request(`/companies/${companyId}/sites`, json(cookie))).json()) as { data: Array<{ code: string }> }).data.map((s) => s.code);
+    expect(await sitesOf(bob)).toEqual([]); // site_staff sees no site until assigned (HLD §2)
+    await app.request(`/companies/${companyId}/members`, json(alice, { email: 'bob@b.test', role: 'site_staff', siteIds: [siteId] }));
+    expect(await sitesOf(bob)).toEqual(['KRM']);
   });
 
   it('POST contracts derives valueTotalCents from DPP × PPN (never stored) and refuses a foreign site', async () => {
@@ -174,11 +195,11 @@ describe('company / site / contract / member CRUD with role authorization', () =
     expect(await r1.json()).toMatchObject({ error: 'invalid_request' });
     expect((await app.request(`/companies/${companyId}/contracts`, json(alice, { siteId, number: 'K-9', employerName: 'X' }))).status).toBe(400);
     expect((await app.request(`/companies/${companyId}/members`, json(alice, { email: 'bob@b.test', role: 'ceo' }))).status).toBe(400);
-    expect((await app.request('/companies', json(alice, null))).status).toBe(400);
+    expect((await app.request('/admin/companies', json(alice, null))).status).toBe(400);
   });
 
   it('malformed JSON body is 400 invalid_json; an unexpected server error is a generic 500 without the message', async () => {
-    const bad = await app.request('/companies', { method: 'POST', headers: { cookie: alice, 'content-type': 'application/json' }, body: '{not json' });
+    const bad = await app.request('/admin/companies', { method: 'POST', headers: { cookie: alice, 'content-type': 'application/json' }, body: '{not json' });
     expect(bad.status).toBe(400);
     expect(await bad.json()).toMatchObject({ error: 'invalid_json' });
 

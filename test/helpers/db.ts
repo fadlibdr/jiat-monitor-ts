@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { pushSchema } from 'drizzle-kit/api';
-import { rlsStatements } from '../../src/db/rls.js';
+import { postMigrationStatements } from '../../src/db/ddl.js';
 import * as schema from '../../src/db/schema.js';
 import type { Db } from '../../src/db/tenant.js';
 
@@ -17,7 +17,7 @@ export async function createTestDb(): Promise<{ db: Db; owner: Db; close: () => 
   const owner = drizzle(client, { schema }) as unknown as Db;
   const { apply } = await pushSchema(schema, owner as never);
   await apply();
-  for (const stmt of rlsStatements()) await owner.execute(sql.raw(stmt));
+  for (const stmt of postMigrationStatements()) await owner.execute(sql.raw(stmt));
   await owner.execute(sql.raw(`CREATE ROLE jiat_login LOGIN`));
   await owner.execute(sql.raw(`GRANT jiat_app, jiat_holding TO jiat_login`));
   // Everything the tests do as "the app" goes through this wrapper; it is still the same PGlite

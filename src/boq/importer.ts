@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
+import { effectiveContract } from '../domain/contract.js';
 import { centsToDecimalString, type Cents } from '../domain/money.js';
-import { boqItems, boqVersions, contracts } from '../db/schema.js';
+import { boqItems, boqVersions, contractAddendums, contracts } from '../db/schema.js';
 import type { Tx } from '../db/tenant.js';
 import { BoqImportError } from './errors.js';
 import { parseBoqWorkbook, type ParsedBoq, type ParsedItem } from './parser.js';
@@ -28,21 +29,24 @@ export interface ImportOptions {
 
 /**
  * Imports a RAB workbook as a NEW boq_version of one contract. Refuses, writing nothing, unless
- * Σ(leaf amounts) == contract.value_dpp_cents exactly. Runs inside withCompany(): the contract is
+ * Σ(leaf amounts) == the effective contract DPP (value_dpp_cents + Σ addendum deltas) exactly. Runs inside withCompany(): the contract is
  * looked up through RLS, so a contract of another company simply does not exist here (SEC-AUTHZ).
  */
 export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: ImportOptions = {}): Promise<ImportSummary> {
   const contract = await tx.query.contracts.findFirst({ where: eq(contracts.id, contractId) });
   if (!contract) throw new BoqImportError('Kontrak tidak ditemukan pada perusahaan aktif.', 'foreign_contract', { contractId });
-  if (contract.valueDppCents <= 0) throw new BoqImportError('Nilai DPP kontrak harus > 0.', 'contract_invalid', { contractId });
+  // an addendum normally comes with a revised RAB: the BOQ must match the DPP in force, not the original
+  const addendums = await tx.select().from(contractAddendums).where(eq(contractAddendums.contractId, contract.id));
+  const dppCents = effectiveContract(contract, addendums).valueDppEffectiveCents;
+  if (dppCents <= 0) throw new BoqImportError('Nilai DPP kontrak harus > 0.', 'contract_invalid', { contractId });
 
   const parsed = await parseBoqWorkbook(file, opt.sheet ?? 'RAB');
-  const diff = parsed.totalCents - contract.valueDppCents;
+  const diff = parsed.totalCents - dppCents;
   const base = {
     items: parsed.items.length,
     leaves: parsed.items.filter((i) => i.isLeaf).length,
     total: centsToDecimalString(parsed.totalCents),
-    contractValueDpp: centsToDecimalString(contract.valueDppCents),
+    contractValueDpp: centsToDecimalString(dppCents),
     diff: centsToDecimalString(diff),
     anomalies: parsed.anomalies,
     footers: parsed.footers,
@@ -56,7 +60,7 @@ export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: I
     );
   }
 
-  const weights = leafWeights(parsed.items, contract.valueDppCents);
+  const weights = leafWeights(parsed.items, dppCents);
   const rolled = parsed.items.map((it, k) => ({ ...it, weight: it.isLeaf ? weights.get(k)! : 0 }));
   for (const [k, it] of rolled.entries()) {
     if (!it.isLeaf) continue;

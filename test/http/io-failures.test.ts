@@ -88,6 +88,15 @@ describe('create-user CLI — failure paths exit 1 with a readable message', () 
     expect(r.code).toBe(1);
   });
 
+  it('an unknown flag is refused before reading the password; --system-admin is accepted', async () => {
+    const bad = await cli(['a@b.test', 'Name', '--admin'], PASSWORD, {});
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toMatch(/Opsi tidak dikenal: --admin/);
+    const ok = await cli(['a@b.test', 'Name', '--system-admin'], PASSWORD, {});
+    expect(ok.code).toBe(1);
+    expect(ok.stderr).toMatch(/harus diisi/); // flag parsed, failing later on missing env
+  });
+
   it('password boundary on stdin: empty and 11 chars rejected; 12 chars passes to the next check (env)', async () => {
     for (const pw of ['', 'a'.repeat(11)]) {
       const r = await cli(['a@b.test', 'Name'], pw, {});

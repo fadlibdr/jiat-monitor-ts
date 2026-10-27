@@ -11,6 +11,10 @@ const Env = z.object({
   BETTER_AUTH_URL: z.url({ message: 'BETTER_AUTH_URL harus URL lengkap tempat API ini dilayani.' }),
   TRUSTED_ORIGINS: z.string().default(''),
   AUTH_ALLOW_SIGNUP: z.enum(['0', '1']).default('0'),
+  /** unset: on in production only (Better Auth default) */
+  AUTH_RATE_LIMIT: z.enum(['0', '1']).optional(),
+  /** comma-separated CIDRs of the reverse proxy, e.g. 127.0.0.1/32 */
+  AUTH_TRUSTED_PROXIES: z.string().default(''),
   NODE_ENV: z.string().default('development'),
 });
 
@@ -26,6 +30,8 @@ async function main(): Promise<void> {
     trustedOrigins,
     allowSignUp: env.AUTH_ALLOW_SIGNUP === '1',
     secureCookies: env.NODE_ENV === 'production',
+    ...(env.AUTH_RATE_LIMIT ? { rateLimit: env.AUTH_RATE_LIMIT === '1' } : {}),
+    trustedProxies: env.AUTH_TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean),
   });
   const app = createApp({ db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins });
   const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => console.log(`JIAT Monitor API on :${info.port}`));
