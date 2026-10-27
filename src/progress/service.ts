@@ -175,6 +175,24 @@ export async function getReport(tx: Tx, reportId: number) {
 
 /** Plan vs actual (approved reports only) for one contract, in percent with 6 decimals. */
 export async function sCurve(tx: Tx, contractId: number) {
+  const points = (await sCurveMicro(tx, contractId)).map((p) => ({
+    period: p.period,
+    plannedPct: p.plannedMicroPct / 1_000_000,
+    actualPct: p.actualMicroPct === null ? null : p.actualMicroPct / 1_000_000,
+    deviationPct: p.deviationMicroPct === null ? null : p.deviationMicroPct / 1_000_000,
+  }));
+  const latest = [...points].reverse().find((p) => p.actualPct !== null) ?? null;
+  return { points, latest };
+}
+
+/** Latest approved weighted progress of a contract, micro-percent (0 when nothing is approved). */
+export async function latestActualMicro(tx: Tx, contractId: number): Promise<number> {
+  const points = await sCurveMicro(tx, contractId);
+  return [...points].reverse().find((p) => p.actualMicroPct !== null)?.actualMicroPct ?? 0;
+}
+
+/** The S-curve in exact micro-percent (what dashboards and termin triggers compare). */
+export async function sCurveMicro(tx: Tx, contractId: number) {
   const leaves = await currentLeaves(tx, contractId);
   const leafWeights = leaves.map((l) => ({ code: l.code, weightMicroPct: l.weightMicroPct }));
   const code = new Map(leaves.map((l) => [l.id, l.code]));
@@ -188,12 +206,5 @@ export async function sCurve(tx: Tx, contractId: number) {
   const itemCodes = await codesOf(tx, items.map((i) => i.boqItemId));
   const periodOfReport = new Map(approved.map((r) => [r.id, r.period]));
   const actual: ActualPoint[] = items.map((i) => ({ code: itemCodes.get(i.boqItemId)!, period: periodOfReport.get(i.reportId)!, cumulativeMicroPct: i.cumulativeMicroPct }));
-  const points = computeSCurve(leafWeights, plan, actual).map((p) => ({
-    period: p.period,
-    plannedPct: p.plannedMicroPct / 1_000_000,
-    actualPct: p.actualMicroPct === null ? null : p.actualMicroPct / 1_000_000,
-    deviationPct: p.deviationMicroPct === null ? null : p.deviationMicroPct / 1_000_000,
-  }));
-  const latest = [...points].reverse().find((p) => p.actualPct !== null) ?? null;
-  return { points, latest };
+  return computeSCurve(leafWeights, plan, actual);
 }

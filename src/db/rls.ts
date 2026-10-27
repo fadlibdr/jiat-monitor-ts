@@ -47,6 +47,14 @@ const SITE_SCOPE: Record<TenantTable, string | null> = {
   goods_receipt_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM goods_receipts g WHERE g.id = gr_id))`,
   progress_reports: `jiat_site_allowed(site_id)`,
   progress_items: `(${UNSCOPED} OR EXISTS (SELECT 1 FROM progress_reports r WHERE r.id = report_id))`,
+  sales_invoices: `jiat_site_allowed(site_id)`,
+  payments: `jiat_site_allowed(site_id)`,
+  dash_contracts: `jiat_site_allowed(site_id)`,
+  dash_progress: `jiat_site_allowed(site_id)`,
+  dash_monthly: `jiat_site_allowed(site_id)`,
+  dash_balances: `jiat_site_allowed(site_id)`,
+  dash_vendors: null,
+  dash_refreshes: null,
 };
 
 export function rlsStatements(): string[] {

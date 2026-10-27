@@ -68,6 +68,34 @@ function cumulativeLookup(points: ReadonlyArray<{ code: string; period: string; 
   };
 }
 
+/**
+ * Portfolio curve over several contracts (holding "Kurva S gabungan", docs/remaining-work.md §5.6):
+ * each contract's curve is carried forward to every period of the union, then weighted by the
+ * contract's effective DPP. A contract's actual counts up to the latest period any contract has an
+ * actual for (so one contract reporting late does not pull the portfolio down to null).
+ */
+export function combineCurves(curves: ReadonlyArray<{ weightCents: number; points: readonly SCurvePoint[] }>): SCurvePoint[] {
+  const used = curves.filter((c) => c.weightCents > 0 && c.points.length);
+  const periods = [...new Set(used.flatMap((c) => c.points.map((p) => p.period)))].sort();
+  const lastActual = used.flatMap((c) => c.points.filter((p) => p.actualMicroPct !== null).map((p) => p.period)).sort().at(-1) ?? null;
+  const total = used.reduce((s, c) => s + BigInt(c.weightCents), 0n);
+  if (total === 0n) return [];
+  return periods.map((period) => {
+    let planned = 0n;
+    let actual = 0n;
+    for (const c of used) {
+      const upTo = c.points.filter((p) => p.period <= period);
+      const plan = upTo.at(-1)?.plannedMicroPct ?? 0;
+      const act = upTo.filter((p) => p.actualMicroPct !== null).at(-1)?.actualMicroPct ?? 0;
+      planned += BigInt(c.weightCents) * BigInt(plan);
+      actual += BigInt(c.weightCents) * BigInt(act);
+    }
+    const p = Number((planned + total / 2n) / total);
+    const a = lastActual !== null && period <= lastActual ? Number((actual + total / 2n) / total) : null;
+    return { period, plannedMicroPct: p, actualMicroPct: a, deviationMicroPct: a === null ? null : a - p };
+  });
+}
+
 /** "2026-10" / "2026-10-15" → "2026-10-01"; null if not a valid month. */
 export function periodOf(raw: string): string | null {
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(raw);

@@ -517,6 +517,152 @@ export const progressItems = pgTable('progress_items', {
   ...timestamps,
 }, (t) => [uniqueIndex('progress_items_report_item').on(t.reportId, t.boqItemId)]);
 
+// ---------------------------------------------------------------------------------------------
+// Phase 4 — invoicing and dashboards (LLD §2, §8)
+// ---------------------------------------------------------------------------------------------
+
+/** Termin invoice to the employer. Amounts are computed at issue (domain/invoice.ts) and frozen. */
+export const SALES_INVOICE_STATUSES = ['issued', 'partial', 'paid', 'cancelled'] as const;
+export const salesInvoices = pgTable('sales_invoices', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  contractId: bigint('contract_id', { mode: 'number' }).notNull().references(() => contracts.id),
+  termId: bigint('term_id', { mode: 'number' }).notNull().references(() => contractTerms.id),
+  number: varchar('number', { length: 40 }).notNull(),
+  invoiceDate: date('invoice_date').notNull(),
+  dueDate: date('due_date').notNull(),
+  /** weighted physical progress (approved) when the invoice was issued, micro-percent */
+  progressMicroPct: bigint('progress_micro_pct', { mode: 'number' }).notNull(),
+  dppCents: bigint('dpp_cents', { mode: 'number' }).notNull(),
+  advanceDeductionCents: bigint('advance_deduction_cents', { mode: 'number' }).notNull(),
+  retentionCents: bigint('retention_cents', { mode: 'number' }).notNull(),
+  ppnCents: bigint('ppn_cents', { mode: 'number' }).notNull(),
+  totalCents: bigint('total_cents', { mode: 'number' }).notNull(),
+  status: varchar('status', { length: 12 }).notNull().default('issued').$type<(typeof SALES_INVOICE_STATUSES)[number]>(),
+  ...authorship,
+  ...timestamps,
+}, (t) => [
+  uniqueIndex('sales_invoices_company_number').on(t.companyId, t.number),
+  // one live invoice per termin; a cancelled one may be re-issued
+  uniqueIndex('sales_invoices_term_live').on(t.termId).where(sql`status <> 'cancelled'`),
+  index('sales_invoices_contract').on(t.contractId),
+]);
+
+export const PAYABLE_TYPES = ['sales_invoices', 'vendor_invoices'] as const;
+export const PAYMENT_METHODS = ['transfer', 'tunai', 'giro', 'lain'] as const;
+/** Money in (sales invoices) and out (vendor invoices). */
+export const payments = pgTable('payments', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  /** site of the paid document, for the site scope and the per-site cash panel */
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  payableType: varchar('payable_type', { length: 20 }).notNull().$type<(typeof PAYABLE_TYPES)[number]>(),
+  payableId: bigint('payable_id', { mode: 'number' }).notNull(),
+  paidAt: date('paid_at').notNull(),
+  amountCents: bigint('amount_cents', { mode: 'number' }).notNull(),
+  method: varchar('method', { length: 12 }).notNull().$type<(typeof PAYMENT_METHODS)[number]>(),
+  reference: varchar('reference', { length: 100 }),
+  note: text('note'),
+  ...authorship,
+  ...timestamps,
+}, (t) => [index('payments_payable').on(t.payableType, t.payableId), index('payments_company_paid').on(t.companyId, t.paidAt)]);
+
+/**
+ * Dashboard snapshots (LLD §8). The LLD's materialized views are implemented as tables written by
+ * the RefreshDashboards job with the SAME functions the detail endpoints use, so "holding = Σ
+ * detail" holds by construction and the S-curve carry-forward is not re-implemented in SQL. The
+ * job replaces a company's rows in one transaction: readers see the old or the new snapshot,
+ * never a mix. Holding reads them through jiat_holding (SELECT only).
+ */
+export const dashContracts = pgTable('dash_contracts', {
+  contractId: bigint('contract_id', { mode: 'number' }).primaryKey().references(() => contracts.id),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  number: varchar('number', { length: 100 }).notNull(),
+  employerName: text('employer_name').notNull(),
+  status: varchar('status', { length: 20 }).notNull(),
+  valueDppCents: bigint('value_dpp_cents', { mode: 'number' }).notNull(),
+  addendumDeltaCents: bigint('addendum_delta_cents', { mode: 'number' }).notNull(),
+  valueDppEffectiveCents: bigint('value_dpp_effective_cents', { mode: 'number' }).notNull(),
+  valueTotalCents: bigint('value_total_cents', { mode: 'number' }).notNull(),
+  endDateEffective: date('end_date_effective'),
+  termsTotal: integer('terms_total').notNull(),
+  termsIssued: integer('terms_issued').notNull(),
+  /** termin whose progress trigger is reached but not yet invoiced */
+  termsReady: integer('terms_ready').notNull(),
+  plannedMicroPct: bigint('planned_micro_pct', { mode: 'number' }),
+  actualMicroPct: bigint('actual_micro_pct', { mode: 'number' }),
+  /** BOQ budget vs PO commitment vs received, total and per category (mockup "Komitmen vs BOQ") */
+  commitment: jsonb('commitment').$type<DashCommitment>().notNull().default(sql`'{}'::jsonb`),
+  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull(),
+}, (t) => [index('dash_contracts_company').on(t.companyId)]);
+
+export interface DashMoney { budgetCents: number; committedCents: number; receivedCents: number }
+export interface DashCommitment { total?: DashMoney; byCategory?: Record<string, DashMoney> }
+
+export const dashProgress = pgTable('dash_progress', {
+  contractId: bigint('contract_id', { mode: 'number' }).notNull().references(() => contracts.id),
+  period: date('period').notNull(),
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  plannedMicroPct: bigint('planned_micro_pct', { mode: 'number' }).notNull(),
+  actualMicroPct: bigint('actual_micro_pct', { mode: 'number' }),
+  deviationMicroPct: bigint('deviation_micro_pct', { mode: 'number' }),
+}, (t) => [primaryKey({ columns: [t.contractId, t.period] }), index('dash_progress_company').on(t.companyId)]);
+
+/** Money per company × site × month (procurement, invoicing, cash, cost). */
+export const dashMonthly = pgTable('dash_monthly', {
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  period: date('period').notNull(),
+  poIssuedCents: bigint('po_issued_cents', { mode: 'number' }).notNull().default(0),
+  grReceivedCents: bigint('gr_received_cents', { mode: 'number' }).notNull().default(0),
+  invoicedDppCents: bigint('invoiced_dpp_cents', { mode: 'number' }).notNull().default(0),
+  invoicedTotalCents: bigint('invoiced_total_cents', { mode: 'number' }).notNull().default(0),
+  cashInCents: bigint('cash_in_cents', { mode: 'number' }).notNull().default(0),
+  cashOutCents: bigint('cash_out_cents', { mode: 'number' }).notNull().default(0),
+  /** confirmed vendor invoices (realised cost) by category: {material: cents, …} */
+  costByCategory: jsonb('cost_by_category').$type<Record<string, number>>().notNull().default(sql`'{}'::jsonb`),
+}, (t) => [primaryKey({ columns: [t.companyId, t.siteId, t.period] })]);
+
+/** Point-in-time balances per company × site (as of the refresh). */
+export const dashBalances = pgTable('dash_balances', {
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  receivable0to30Cents: bigint('receivable_0_30_cents', { mode: 'number' }).notNull().default(0),
+  receivable31to60Cents: bigint('receivable_31_60_cents', { mode: 'number' }).notNull().default(0),
+  receivable61to90Cents: bigint('receivable_61_90_cents', { mode: 'number' }).notNull().default(0),
+  receivable90pCents: bigint('receivable_90p_cents', { mode: 'number' }).notNull().default(0),
+  payableTotalCents: bigint('payable_total_cents', { mode: 'number' }).notNull().default(0),
+  payableOverdueCents: bigint('payable_overdue_cents', { mode: 'number' }).notNull().default(0),
+  prOpen: integer('pr_open').notNull().default(0),
+  prWaiting: integer('pr_waiting').notNull().default(0),
+  poOutstandingCents: bigint('po_outstanding_cents', { mode: 'number' }).notNull().default(0),
+  poOverdueCount: integer('po_overdue_count').notNull().default(0),
+  photos7d: integer('photos_7d').notNull().default(0),
+  asked7d: integer('asked_7d').notNull().default(0),
+  openKonfirmasi: integer('open_konfirmasi').notNull().default(0),
+  openCek: integer('open_cek').notNull().default(0),
+  medianConfirmMinutes7d: integer('median_confirm_minutes_7d'),
+  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull(),
+}, (t) => [primaryKey({ columns: [t.companyId, t.siteId] })]);
+
+/** Top vendors per company by committed PO value, with what is not yet delivered. */
+export const dashVendors = pgTable('dash_vendors', {
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  vendorId: bigint('vendor_id', { mode: 'number' }).notNull().references(() => vendors.id),
+  vendorName: text('vendor_name').notNull(),
+  poValueCents: bigint('po_value_cents', { mode: 'number' }).notNull(),
+  undeliveredCents: bigint('undelivered_cents', { mode: 'number' }).notNull(),
+}, (t) => [primaryKey({ columns: [t.companyId, t.vendorId] })]);
+
+/** When each company's snapshot was last rebuilt ("data per HH:MM"; POST /holding/refresh guard). */
+export const dashRefreshes = pgTable('dash_refreshes', {
+  companyId: bigint('company_id', { mode: 'number' }).primaryKey().references(() => companies.id),
+  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull(),
+});
+
 /**
  * Background jobs (LLD §9), Postgres-backed so the pilot needs no Redis. Not a tenant table: the
  * worker claims across companies, and every job carries company_id explicitly (LLD §3); handlers
@@ -563,4 +709,5 @@ export const TENANT_TABLES = [
   'vendors', 'intake_events', 'attachments', 'vendor_invoices',
   'document_sequences', 'purchase_requests', 'purchase_request_items', 'purchase_orders', 'purchase_order_items',
   'goods_receipts', 'goods_receipt_items', 'progress_reports', 'progress_items',
+  'sales_invoices', 'payments', 'dash_contracts', 'dash_progress', 'dash_monthly', 'dash_balances', 'dash_vendors', 'dash_refreshes',
 ] as const;
