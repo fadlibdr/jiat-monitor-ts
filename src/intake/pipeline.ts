@@ -9,15 +9,15 @@ import {
   type IntakeOutcome, type IntakeReview, type VendorInvoiceStatus,
 } from '../db/schema.js';
 import { siteScopeFor, withApp, withCompany, type Db } from '../db/tenant.js';
-import { PermanentJobError, type Job, type Registry } from '../jobs/queue.js';
+import { errorText, PermanentJobError, type Job, type Registry } from '../jobs/queue.js';
 import { perceptualHash, sha256Hex } from './hash.js';
 import { OcrParseError, type OcrClient } from './ocr.js';
 import {
-  correctionReply, duplicateReply, REPLY, summaryReply, type ReplyRow,
+  correctionReply, duplicateReply, REPLY, shortRef, summaryReply, type ReplyRow,
 } from './replies.js';
 import { applyChanges, recomputeFlags, statusFor, type ApplyResult, type Change } from './review.js';
 import { intakeKey, type ObjectStorage } from './storage.js';
-import type { TelegramApi } from './telegram-api.js';
+import { FileTooBigError, type TelegramApi } from './telegram-api.js';
 import { matchVendor } from './vendors.js';
 
 /**
@@ -78,13 +78,20 @@ export async function processPhoto(deps: IntakeDeps, job: Job): Promise<void> {
   const ev = await loadEvent(deps, job);
   if (FINAL_PHOTO.includes(ev.outcome)) return;
   const companyId = ev.companyId;
-  const { fileId, mime } = ev.payload as { fileId: string; mime: string };
+  const { fileId, mime, fileSize } = ev.payload as { fileId: string; mime: string; fileSize?: number | null };
+  const tooBig = () => finish(deps, job, 'tidak_terbaca', 'Foto terlalu besar. Kirim sebagai foto biasa (bukan file).');
 
-  const file = await telegram.getFile(fileId);
-  if (file.fileSize !== null && file.fileSize > config.maxPhotoBytes) {
-    await finish(deps, job, 'tidak_terbaca', 'Foto terlalu besar. Kirim sebagai foto biasa (bukan file).');
-    return;
+  // the size Telegram announced in the update: no getFile for a file we would refuse anyway (and the
+  // Bot API refuses getFile above 20 MB, which would otherwise be retried as a transient error)
+  if (fileSize != null && fileSize > config.maxPhotoBytes) return void (await tooBig());
+  let file: { filePath: string; fileSize: number | null };
+  try {
+    file = await telegram.getFile(fileId);
+  } catch (e) {
+    if (e instanceof FileTooBigError) return void (await tooBig());
+    throw e;
   }
+  if (file.fileSize !== null && file.fileSize > config.maxPhotoBytes) return void (await tooBig());
   const bytes = await telegram.downloadFile(file.filePath, config.maxPhotoBytes);
   const sha256 = sha256Hex(bytes);
 
@@ -211,33 +218,54 @@ export async function processCorrection(deps: IntakeDeps, job: Job): Promise<voi
   const sender = await resolveSender(deps, ev);
   if (!sender) return void (await setOutcome(deps, ev, 'diabaikan'));
 
-  const rowId = await resolveRow(deps, ev, corr, replyToMessageId);
-  if (!rowId) {
+  const target = await resolveRow(deps, ev, corr, replyToMessageId);
+  if (!target) {
     // "#xxxx" typed on purpose deserves an answer; a reply to some other message (another bot's,
     // or a summary older than our records) is not addressed to us — stay quiet (LLD §7)
     if (corr.rowRef) return void (await finish(deps, job, 'koreksi_ditolak', REPLY.ambiguousRef));
     return void (await setOutcome(deps, ev, 'diabaikan'));
   }
-  if ('error' in corr) return void (await finish(deps, job, 'koreksi_ditolak', REPLY.valueError(corr.error)));
+  // linked to the row like every other answer, so a reply to the error message still finds it
+  if ('error' in corr) return void (await finishLinked(deps, ev, 'koreksi_ditolak', REPLY.valueError(corr.error), target.id));
 
   const change = toChange(corr);
   const ctx = { companyId: ev.companyId, userId: sender.userId, siteIds: sender.siteIds };
-  const result: ApplyResult = await withCompany(db, ctx, async (tx) => {
-    const r = await applyChanges(tx, rowId, [change], { channel: 'chat', userId: sender.userId, today: deps.now() });
-    await tx.execute(sql`SELECT jiat_audit_event(${ev.companyId}, ${sender.userId}, 'chat_correction', 'vendor_invoices',
-      ${r.row?.id ?? null}, ${JSON.stringify({ chatId: ev.chatId, messageId: ev.messageId, command: corr.command, ok: r.ok })}::jsonb, NULL)`);
-    await tx.update(intakeEvents).set({
-      outcome: r.ok ? 'koreksi_ok' : 'koreksi_ditolak', vendorInvoiceId: r.row?.id ?? null, updatedAt: new Date(),
-    }).where(eq(intakeEvents.id, ev.id));
-    return r;
-  });
+  let result: ApplyResult;
+  try {
+    result = await withCompany(db, ctx, async (tx) => {
+      const r = await applyChanges(tx, target.rowId, [change], { channel: 'chat', userId: sender.userId, today: deps.now() });
+      await tx.execute(sql`SELECT jiat_audit_event(${ev.companyId}, ${sender.userId}, 'chat_correction', 'vendor_invoices',
+        ${r.row?.id ?? null}, ${JSON.stringify({ chatId: ev.chatId, messageId: ev.messageId, command: corr.command, ok: r.ok })}::jsonb, NULL)`);
+      await tx.update(intakeEvents).set({
+        outcome: r.ok ? 'koreksi_ok' : 'koreksi_ditolak', vendorInvoiceId: r.row?.id ?? null, updatedAt: new Date(),
+      }).where(eq(intakeEvents.id, ev.id));
+      return r;
+    });
+  } catch (e) {
+    // a value the database refuses (22xxx/23xxx) or a guard (RangeError) fails the same way on every
+    // retry, and the chat's serial key would hold back every later correction meanwhile: answer now
+    const code = pgCode(e);
+    if (e instanceof RangeError || code?.startsWith('22') || code?.startsWith('23')) {
+      deps.log('intake_correction_refused', { companyId: ev.companyId, chatId: ev.chatId, messageId: ev.messageId, code: code ?? e?.constructor?.name });
+      return void (await finishLinked(deps, ev, 'koreksi_ditolak', REPLY.valueError('nilai tidak bisa disimpan'), target.id));
+    }
+    throw e;
+  }
 
   let reply: string;
   if (result.ok) reply = correctionReply(toReplyRow(result.row), corr.command.toUpperCase());
-  else if (result.reason === 'closed') reply = REPLY.alreadyConfirmed;
+  else if (result.reason === 'closed') reply = result.row?.status === 'ditolak' ? REPLY.alreadyRejected(shortRef(result.row.rowId)) : REPLY.alreadyConfirmed;
   else if (result.reason === 'confirm_blocked') reply = REPLY.confirmBlocked(result.flags ?? []);
   else if (result.reason === 'duplicate_confirmed') reply = REPLY.duplicateConfirmed;
+  else if (result.reason === 'invalid_value') reply = REPLY.valueError(result.detail ?? 'nilai tidak valid');
   else reply = REPLY.ambiguousRef;
+  await replyAfterCommit(deps, ev, reply, null);
+}
+
+/** Final correction outcome linked to its row, then the reply (whose message id then resolves to the row). */
+async function finishLinked(deps: IntakeDeps, ev: EventRow, outcome: IntakeOutcome, reply: string, vendorInvoiceId: number): Promise<void> {
+  await withCompany(deps.db, ev.companyId, (tx) =>
+    tx.update(intakeEvents).set({ outcome, vendorInvoiceId, error: null, updatedAt: new Date() }).where(eq(intakeEvents.id, ev.id)));
   await replyAfterCommit(deps, ev, reply, null);
 }
 
@@ -273,27 +301,30 @@ const CLOSED_REF_WINDOW_DAYS = 30;
 /**
  * Reply to a bot summary → that summary's row. Else "#xxxx" → the one row at this site ending in
  * xxxx: open rows first, then rows closed in the last 30 days (4 hex digits collide across years).
+ * A reply that ALSO carries "#xxxx" must name the same row: the typed reference is the more
+ * specific intent, and acting on the other row (TOLAK cannot be undone) would be worse than asking.
  */
-async function resolveRow(deps: IntakeDeps, ev: EventRow, corr: Correction, replyToMessageId: number | null): Promise<string | null> {
+async function resolveRow(deps: IntakeDeps, ev: EventRow, corr: Correction, replyToMessageId: number | null): Promise<{ id: number; rowId: string } | null> {
   return withCompany(deps.db, ev.companyId, async (tx) => {
     if (replyToMessageId !== null) {
-      const [src] = await tx.select({ rowId: vendorInvoices.rowId })
+      const [src] = await tx.select({ id: vendorInvoices.id, rowId: vendorInvoices.rowId })
         .from(intakeEvents).innerJoin(vendorInvoices, eq(vendorInvoices.id, intakeEvents.vendorInvoiceId))
         .where(and(eq(intakeEvents.chatId, ev.chatId), eq(intakeEvents.replyMessageId, replyToMessageId)))
         .orderBy(desc(intakeEvents.id)).limit(1);
-      if (src) return src.rowId;
+      if (src) return corr.rowRef === null || shortRef(src.rowId) === corr.rowRef ? src : null;
     }
     if (corr.rowRef) {
       const byRef = sql`right(replace(${vendorInvoices.rowId}::text, '-', ''), 4) = ${corr.rowRef}`;
-      const open = await tx.select({ rowId: vendorInvoices.rowId }).from(vendorInvoices).where(and(
+      const pick = { id: vendorInvoices.id, rowId: vendorInvoices.rowId };
+      const open = await tx.select(pick).from(vendorInvoices).where(and(
         eq(vendorInvoices.siteId, ev.siteId), inArray(vendorInvoices.status, ['perlu_konfirmasi', 'perlu_cek']), byRef,
       )).limit(2);
-      if (open.length) return open.length === 1 ? open[0]!.rowId : null;
+      if (open.length) return open.length === 1 ? open[0]! : null;
       const since = new Date(deps.now().getTime() - CLOSED_REF_WINDOW_DAYS * 86_400_000);
-      const closed = await tx.select({ rowId: vendorInvoices.rowId }).from(vendorInvoices).where(and(
+      const closed = await tx.select(pick).from(vendorInvoices).where(and(
         eq(vendorInvoices.siteId, ev.siteId), inArray(vendorInvoices.status, ['terkonfirmasi', 'ditolak']), gte(vendorInvoices.updatedAt, since), byRef,
       )).limit(2);
-      if (closed.length === 1) return closed[0]!.rowId;
+      if (closed.length === 1) return closed[0]!;
     }
     return null;
   });
@@ -361,7 +392,7 @@ async function setOutcome(deps: IntakeDeps, ev: EventRow, outcome: IntakeOutcome
 async function giveUp(deps: IntakeDeps, job: Job, finals: readonly IntakeOutcome[], reply: string, error: unknown): Promise<EventRow | null> {
   const ev = await loadEvent(deps, job).catch(() => null);
   if (!ev || finals.includes(ev.outcome)) return ev;
-  return finish(deps, job, 'gagal', reply, String(error).slice(0, 500));
+  return finish(deps, job, 'gagal', reply, errorText(error).slice(0, 500));
 }
 
 /** Final outcome first (so a reply failure cannot cause a second processing), then the reply. */

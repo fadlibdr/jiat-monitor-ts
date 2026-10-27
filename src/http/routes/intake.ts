@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { CATEGORIES } from '../../domain/categories.js';
@@ -19,6 +19,9 @@ const ReviewQuery = z.object({
   status: z.enum(VENDOR_INVOICE_STATUSES).optional(),
   siteId: IdParam.optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  /** "<created_at, microseconds, UTC>~<row_id>" from the previous page's nextCursor */
+  cursor: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z~[0-9a-f-]{36}$/i, 'cursor tidak valid')
+    .transform((s) => { const [at, rowId] = s.split('~') as [string, string]; return { at, rowId }; }).optional(),
 });
 /** The review screen sends what it edits; money as integer cents or as text ("Rp 2.450.000,-"). */
 const ReviewPatch = z.object({
@@ -37,13 +40,24 @@ const MatchBody = z.object({ poId: IdParam.nullable(), grId: IdParam.nullable().
  * corrections, so validation, flags and the audit trail are one path.
  */
 export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: ObjectStorage | undefined): void {
+  /**
+   * Newest first, in pages: `nextCursor` (present when the page is full) is passed back as `cursor`.
+   * Keyset on (created_at, row_id) at microsecond precision, so no row is skipped or repeated even
+   * when several share a millisecond, and the oldest open rows stay reachable however many there are.
+   */
   app.get('/companies/:companyId/intake/review', requireRole(REVIEW_ROLES), async (c) => {
     const q = ReviewQuery.parse(c.req.query());
     const where: SQL[] = [q.status ? eq(vendorInvoices.status, q.status) : inArray(vendorInvoices.status, ['perlu_konfirmasi', 'perlu_cek'])];
     if (q.siteId) where.push(eq(vendorInvoices.siteId, q.siteId));
+    if (q.cursor) where.push(sql`(${vendorInvoices.createdAt}, ${vendorInvoices.rowId}) < (${q.cursor.at}::timestamptz, ${q.cursor.rowId}::uuid)`);
     const rows = await withCompany(db, c.get('tenant'), (tx) =>
-      tx.select().from(vendorInvoices).where(and(...where)).orderBy(desc(vendorInvoices.createdAt), asc(vendorInvoices.id)).limit(q.limit));
-    return c.json({ data: rows.map((r) => publicRow(r, c.get('role'))) });
+      tx.select({ row: vendorInvoices, at: sql<string>`to_char(${vendorInvoices.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` })
+        .from(vendorInvoices).where(and(...where)).orderBy(desc(vendorInvoices.createdAt), desc(vendorInvoices.rowId)).limit(q.limit));
+    const last = rows.at(-1);
+    return c.json({
+      data: rows.map((r) => publicRow(r.row, c.get('role'))),
+      nextCursor: rows.length === q.limit && last ? `${last.at}~${last.row.rowId}` : null,
+    });
   });
 
   app.patch('/companies/:companyId/intake/:rowId', requireRole(EDIT_ROLES), async (c) => {
@@ -69,6 +83,8 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
     const r = await withCompany(db, c.get('tenant'), (tx) => applyChanges(tx, rowId, changes, { channel: 'admin', userId: c.get('userId'), today: now() }));
     if (r.ok) return c.json({ data: publicRow(r.row, c.get('role')) });
     if (r.reason === 'not_found') notFound('Nota tidak ditemukan.');
+    if (r.reason === 'vendor_not_found') notFound('Vendor tidak ditemukan.');
+    if (r.reason === 'invalid_value') return c.json({ error: 'invalid_request', message: r.detail ?? 'Nilai tidak valid.' }, 400);
     const message = r.reason === 'closed' ? 'Nota sudah ditutup (terkonfirmasi/ditolak).'
       : r.reason === 'confirm_blocked' ? 'Belum bisa dikonfirmasi.' : 'Sudah ada nota terkonfirmasi dengan vendor, tanggal, dan total yang sama.';
     return c.json({ error: r.reason, message, flags: r.flags ?? [] }, 409);

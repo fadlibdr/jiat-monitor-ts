@@ -73,9 +73,16 @@ export function createApp({
       case '23503': return c.json({ error: 'conflict', message: 'Data masih dirujuk oleh data lain.' }, 409);
       // RLS WITH CHECK: e.g. writing a row for a site outside the caller's scope
       case '42501': return c.json({ error: 'forbidden', message: 'Akses ditolak oleh kebijakan data.' }, 403);
+      // a value the column cannot hold (too long, bad encoding/NUL, not a number): the request, not the server
+      case '22001': case '22021': case '22P02': case '22003':
+        return c.json({ error: 'invalid_request', message: 'Nilai tidak valid atau terlalu panjang.' }, 400);
     }
-    // errorText reports the database's reason, not the SQL and its bound parameters (row data)
-    log('unhandled', { method: c.req.method, path: c.req.path, userId: c.get('userId') ?? null, companyId: c.get('companyId') ?? null, error: errorText(err) });
+    // errorText: the database's reason, never Drizzle's SQL + bound parameters (row data such as a
+    // vendor's bank account must not reach the logs, LLD §9)
+    log('unhandled', {
+      method: c.req.method, path: c.req.path, userId: c.get('userId') ?? null, companyId: c.get('companyId') ?? null,
+      code: pgCode(err) ?? null, error: errorText(err),
+    });
     return c.json({ error: 'internal', message: 'Terjadi kesalahan pada server.' }, 500);
   });
 

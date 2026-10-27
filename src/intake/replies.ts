@@ -1,10 +1,12 @@
 import { CATEGORY_LABEL, type Category } from '../domain/categories.js';
 import { formatRupiah } from '../domain/money.js';
+import { scrubVendorName } from '../domain/vendor-name.js';
 
 /**
  * Every text the bot sends to a group. HLD §8 / UU 27/2022: a reply never carries a bank account
  * or an NPWP. That is enforced by construction — `ReplyRow` has no field that could hold one —
- * and by a test that feeds a row with those values through every builder.
+ * by scrubbing the one free-text field (the vendor name, read by OCR) a second time here, and by a
+ * test that feeds a row with those values through every builder.
  */
 export interface ReplyRow {
   rowId: string;
@@ -42,7 +44,7 @@ function idDate(iso: string | null): string {
 export function summaryReply(r: ReplyRow): string {
   const lines = [
     `Tercatat #${shortRef(r.rowId)}`,
-    `Vendor: ${r.vendorName ?? '—'}`,
+    `Vendor: ${scrubVendorName(r.vendorName) ?? '—'}`,
     `Tanggal: ${idDate(r.invoiceDate)}`,
     `Total: ${formatRupiah(r.totalCents)}`,
     `Kategori: ${r.category ? CATEGORY_LABEL[r.category] : '—'}`,
@@ -58,7 +60,7 @@ export function duplicateReply(rowId: string | null): string {
 }
 
 export function correctionReply(r: ReplyRow, what: string): string {
-  if (r.status === 'terkonfirmasi') return `#${shortRef(r.rowId)} terkonfirmasi: ${r.vendorName ?? '—'}, ${formatRupiah(r.totalCents)}.`;
+  if (r.status === 'terkonfirmasi') return `#${shortRef(r.rowId)} terkonfirmasi: ${scrubVendorName(r.vendorName) ?? '—'}, ${formatRupiah(r.totalCents)}.`;
   if (r.status === 'ditolak') return `#${shortRef(r.rowId)} ditolak. Foto tetap disimpan.`;
   const issues = flagText(r.flags.filter((f) => f !== 'npwp_format'));
   return `#${shortRef(r.rowId)} ${what} diperbarui. Total ${formatRupiah(r.totalCents)}.${issues.length ? ` Masih perlu: ${issues.join('; ')}.` : ' Balas OK untuk konfirmasi.'}`;
@@ -69,6 +71,7 @@ export const REPLY = {
   failure: 'Sistem sedang gangguan; foto ini belum tercatat. Mohon kirim ulang foto ini beberapa saat lagi.',
   correctionFailed: 'Koreksi gagal diproses, hubungi admin.',
   alreadyConfirmed: 'Nota ini sudah dikonfirmasi; ubah lewat admin.',
+  alreadyRejected: (ref: string) => `#${ref} sudah ditolak; tidak bisa diubah lewat chat.`,
   ambiguousRef: 'Kode # tidak ditemukan atau lebih dari satu nota cocok. Balas langsung ke pesan ringkasan nota.',
   confirmBlocked: (flags: readonly string[]) => `Belum bisa dikonfirmasi: ${flagText(flags).join('; ')}.`,
   duplicateConfirmed: 'Sudah ada nota terkonfirmasi dengan vendor, tanggal, dan total yang sama.',

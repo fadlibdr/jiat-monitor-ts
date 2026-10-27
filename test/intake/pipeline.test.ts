@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { headerAuthenticator } from '../../src/auth/authenticator.js';
+import { DOC_NUMBER_MAX } from '../../src/domain/correction.js';
 import { hammingDistance } from '../../src/domain/hamming.js';
 import {
   attachments, auditLogs, companies, companyUsers, intakeEvents, jobs, sites, telegramChats, users, vendorInvoices, vendors,
@@ -15,7 +16,7 @@ import {
 } from '../../src/intake/pipeline.js';
 import { REPLY, shortRef } from '../../src/intake/replies.js';
 import { intakeKey, type ObjectStorage } from '../../src/intake/storage.js';
-import { TelegramError, type TelegramApi } from '../../src/intake/telegram-api.js';
+import { FileTooBigError, TelegramError, type TelegramApi } from '../../src/intake/telegram-api.js';
 import { enqueue, runOnce, type Registry, type RunResult } from '../../src/jobs/queue.js';
 import { asOwner, createTestDb } from '../helpers/db.js';
 
@@ -1221,5 +1222,158 @@ describe('after intake: review API on the same data', () => {
     expect(adminText).toContain(row.rowId);
     expect(adminText).not.toContain(OCR_NPWP_DIGITS);
     expect(adminText).not.toContain(OCR_BANK);
+  });
+});
+
+describe('corrections: explicit reference, rejected rows, refused values; photo size; OCR vendor names', () => {
+  it('a reply to B\'s summary carrying A\'s "#xxxx" acts on neither: the bot asks which row', async () => {
+    const a = await savedPhoto(SEED.ref);
+    const b = await savedPhoto(SEED.ref2, s2({ vendor: 'Toko Lain', description: 'Pasir 3 m3' }));
+    const m = await sendText(`#${shortRef(a.row.rowId)} TOLAK`, { replyTo: b.summary.messageId });
+    await drain();
+    expect(replyTo(m).text).toBe(REPLY.ambiguousRef);
+    expect(await eventOf(CHAT_A1, m)).toMatchObject({ outcome: 'koreksi_ditolak' });
+    expect([(await rowById(a.row.id)).status, (await rowById(b.row.id)).status]).toEqual([a.row.status, b.row.status]);
+  });
+
+  it('after TOLAK, OK (by reply and by "#xxxx") is answered "sudah ditolak", not "sudah dikonfirmasi"', async () => {
+    const { row, summary } = await savedPhoto(SEED.closed);
+    await sendText('TOLAK', { replyTo: summary.messageId });
+    await drain();
+    const ref = shortRef(row.rowId);
+    const viaReply = await sendText('OK', { replyTo: summary.messageId });
+    const viaRef = await sendText(`OK #${ref}`);
+    await drain();
+    for (const m of [viaReply, viaRef]) {
+      expect(replyTo(m).text).toBe(REPLY.alreadyRejected(ref));
+      expect(replyTo(m).text).not.toMatch(/dikonfirmasi/);
+    }
+    expect((await rowById(row.id)).status).toBe('ditolak');
+  });
+
+  it('a reply to the bot\'s "tidak terbaca" answer still reaches the row', async () => {
+    const { row, summary } = await savedPhoto(SEED.closed);
+    const bad = await sendText('TOTAL dua juta', { replyTo: summary.messageId });
+    await drain();
+    expect(await eventOf(CHAT_A1, bad)).toMatchObject({ outcome: 'koreksi_ditolak', vendorInvoiceId: row.id });
+    const again = await sendText('TOTAL 2000000', { replyTo: replyTo(bad).messageId });
+    await drain();
+    expect(await eventOf(CHAT_A1, again)).toMatchObject({ outcome: 'koreksi_ok', vendorInvoiceId: row.id });
+    expect((await rowById(row.id)).totalCents).toBe(200_000_000);
+  });
+
+  it('NOMOR of exactly 100 characters is saved; 101 and an unusable VENDOR are answered with the reason', async () => {
+    const { row, summary } = await savedPhoto(SEED.closed);
+    const atLimit = '9'.repeat(DOC_NUMBER_MAX);
+    const ok = await sendText(`NOMOR ${atLimit}`, { replyTo: summary.messageId });
+    const longNo = await sendText(`NOMOR ${atLimit}9`, { replyTo: summary.messageId });
+    const shortVendor = await sendText('VENDOR A', { replyTo: summary.messageId });
+    const results = await drain();
+    expect(results.every((r) => r.result === 'done')).toBe(true);
+    expect(await eventOf(CHAT_A1, ok)).toMatchObject({ outcome: 'koreksi_ok' });
+    expect(replyTo(longNo).text).toMatch(new RegExp(`nomor maksimal ${DOC_NUMBER_MAX}`));
+    expect(replyTo(shortVendor).text).toMatch(/nama vendor/);
+    expect(await rowById(row.id)).toMatchObject({ docNumber: atLimit, vendorName: row.vendorName });
+  });
+
+  it('control characters (NUL) are dropped at the webhook: 200, and the correction still applies', async () => {
+    const { row, summary } = await savedPhoto(SEED.closed);
+    const m = await sendText('VENDOR Toko\u0000 Jaya\u0007', { replyTo: summary.messageId });
+    await drain();
+    expect(await eventOf(CHAT_A1, m)).toMatchObject({ outcome: 'koreksi_ok', payload: expect.objectContaining({ text: 'VENDOR Toko Jaya' }) });
+    expect((await rowById(row.id)).vendorName).toBe('Toko Jaya');
+  });
+
+  it('a value the database refuses is answered once (koreksi_ditolak), not retried while the chat waits', async () => {
+    const { row, summary } = await savedPhoto(SEED.closed);
+    // stands in for any column check / encoding error the database raises on the update
+    const REFUSED_NUMBER = 'BOOM';
+    const DATA_EXCEPTION = '22023'; // invalid_parameter_value, class 22 like 22001 / 22021
+    await owner(async () => {
+      await db.execute(sql.raw(`CREATE OR REPLACE FUNCTION test_refuse_boom() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.doc_number = '${REFUSED_NUMBER}' THEN RAISE EXCEPTION 'refused' USING ERRCODE = '${DATA_EXCEPTION}'; END IF; RETURN NEW; END $$`));
+      await db.execute(sql`CREATE TRIGGER test_refuse_boom BEFORE UPDATE ON vendor_invoices FOR EACH ROW EXECUTE FUNCTION test_refuse_boom()`);
+    });
+    try {
+      const m = await sendText(`NOMOR ${REFUSED_NUMBER}`, { replyTo: summary.messageId });
+      const results = await drain();
+      expect(results.map((r) => r.result)).toEqual(['done']);
+      expect(await eventOf(CHAT_A1, m)).toMatchObject({ outcome: 'koreksi_ditolak', vendorInvoiceId: row.id });
+      expect(replyTo(m).text).toBe(REPLY.valueError('nilai tidak bisa disimpan'));
+      expect((await rowById(row.id)).docNumber).toBe(row.docNumber);
+      expect(logs.map((l) => l.msg)).toContain('intake_correction_refused');
+    } finally {
+      await owner(() => db.execute(sql`DROP TRIGGER test_refuse_boom ON vendor_invoices`));
+    }
+  });
+
+  it('a file announced larger than the limit is refused without calling getFile; a getFile "too big" is not retried', async () => {
+    const messageId = ++seq;
+    const res = await postUpdate(photoUpdate(messageId, 'file-huge', config.maxPhotoBytes + 1, CHAT_A1, TG.staff));
+    expect(res.status).toBe(200);
+    await drain();
+    expect(tg.getFileCalls).not.toContain('file-huge');
+    expect(await eventOf(CHAT_A1, messageId)).toMatchObject({ outcome: 'tidak_terbaca' });
+    expect(replyTo(messageId).text).toMatch(/terlalu besar/);
+
+    const img = await receipt(SEED.size);
+    tg.getFile = async () => { throw new FileTooBigError('getFile: Bad Request: file is too big'); };
+    const second = await sendPhoto(img);
+    const results = await drain();
+    expect(results.map((r) => r.result)).toEqual(['done']);
+    expect(await eventOf(CHAT_A1, second)).toMatchObject({ outcome: 'tidak_terbaca' });
+    expect(ocr.calls).toEqual([]);
+  });
+
+  it('OCR vendor "-" is stored as missing (field_kosong, perlu_cek); OK is refused with the reason, never a crash', async () => {
+    const { row, summary } = await savedPhoto(SEED.cat, s2({ vendor: '-' }));
+    expect(row).toMatchObject({ vendorName: null, status: 'perlu_cek' });
+    expect(row.confidence.flags).toContain('field_kosong');
+    const ok = await sendText('OK', { replyTo: summary.messageId });
+    const results = await drain();
+    expect(results.map((r) => r.result)).toEqual(['done']);
+    expect(replyTo(ok).text).toMatch(/Belum bisa dikonfirmasi/);
+  });
+
+  it('an NPWP or bank account OCR\'d into the vendor name never reaches the group, nor the stored name', async () => {
+    const { row, summary } = await savedPhoto(SEED.vendor, s2({ vendor: `Toko Sinar Jaya NPWP ${OCR_NPWP_TEXT} Rek BCA ${OCR_BANK}` }));
+    expect(row.vendorName).toBe('Toko Sinar Jaya');
+    expectNoPii(summary.text);
+  });
+});
+
+describe('review API: pages and vendor ids', () => {
+  const as = (userId: number) => ({ headers: { 'x-dev-user-id': String(userId) } });
+
+  it('keyset pages over rows that share a timestamp return every open row exactly once', async () => {
+    const at = new Date('2026-10-01T00:00:00.123Z');
+    await withCompany(db, A, (tx) => tx.insert(vendorInvoices).values(Array.from({ length: 5 }, (_, i) => ({
+      companyId: A, siteId: s1, totalCents: 1000 + i, status: 'perlu_konfirmasi' as const, source: 'manual' as const, createdAt: at,
+    }))));
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const url: string = `/companies/${A}/intake/review?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      const body = (await (await app.request(url, as(adminId))).json()) as { data: Array<{ rowId: string }>; nextCursor: string | null };
+      seen.push(...body.data.map((r) => r.rowId));
+      cursor = body.nextCursor;
+      if (!cursor) break;
+    }
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen).size).toBe(5);
+    expect((await app.request(`/companies/${A}/intake/review?cursor=nonsense`, as(adminId))).status).toBe(400);
+  });
+
+  it('PATCH with an unknown vendorId says "Vendor tidak ditemukan" (404), an unusable vendorName 400', async () => {
+    const { row } = await savedPhoto(SEED.review);
+    const patch = (body: unknown) => app.request(`/companies/${A}/intake/${row.rowId}`, {
+      method: 'PATCH', headers: { 'x-dev-user-id': String(adminId), 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const missing = await patch({ vendorId: 9_999_999 });
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toContain('Vendor tidak ditemukan');
+    const foreign = await patch({ vendorId: vendorB });
+    expect(foreign.status).toBe(404);
+    expect((await patch({ vendorName: '--' })).status).toBe(400);
   });
 });

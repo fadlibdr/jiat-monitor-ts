@@ -26,7 +26,7 @@ const CompanyPatch = CompanyBody.omit({ code: true }).partial().refine((b) => Ob
 const UserParams = z.object({ userId: IdParam });
 const UserPatch = z.object({
   name: z.string().min(2).max(200).optional(),
-  phone: z.string().regex(/^\+?[0-9 -]{6,30}$/).nullable().optional(),
+  phone: z.string().max(30).regex(/^\+?[0-9 -]{6,30}$/).nullable().optional(),
   telegramUserId: z.number().int().positive().nullable().optional(),
   isActive: z.boolean().optional(),
   isSystemAdmin: z.boolean().optional(),

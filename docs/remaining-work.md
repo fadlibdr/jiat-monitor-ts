@@ -103,29 +103,31 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
 
 Built: `parseIdrCents` and `parseIndonesianDate` (MoneyParser/DateParser), `parseCorrection`, `validateReceipt` V1–V7, `hammingDistance` (V9) and the category aliases.
 
-- [ ] **Tables:** `vendors`, `vendor_invoices` (with `row_id` uuid, `image_hash`, `phash`, `confidence` jsonb and both unique keys, the second `DEFERRABLE`), `attachments`, `telegram_chats`, `intake_events`. Add them to RLS.
-- [ ] **Webhook.** `POST /telegram/webhook` checks `X-Telegram-Bot-Api-Secret-Token`, ignores unknown `chat_id`, stores the raw update, returns 200 and enqueues work.
-- [ ] **Job runner** (see decision 7). `ProcessIncomingPhoto` is idempotent per `(chat_id, message_id)`, retries 3× at 30/120/600 s, and on permanent failure replies and alerts the admin.
-- [ ] **Download photos** with Telegram `getFile`, then compute SHA-256 and the 64-bit pHash. Needs an image library; see §6 on dependency vetting.
-- [ ] **Object storage.** Upload the original photo before the DB transaction and discard the path if the transaction fails (LLD §9).
-- [ ] **OCR adapter** (`vision|openai|gemini`, two stages, structured output):
+- [x] **Tables:** `vendors`, `vendor_invoices` (with `row_id` uuid, `image_hash`, `phash`, `confidence` jsonb and both unique keys, the second `DEFERRABLE`), `attachments`, `telegram_chats`, `intake_events`. Add them to RLS. — **Done** (`drizzle/0002`, `0003`). The second key is a **partial** unique index `WHERE status = 'terkonfirmasi'` instead of `DEFERRABLE`: it binds exactly when a row is confirmed, and rows with an unknown vendor are not affected. `vendor_invoices` also gained `confirmed_at` / `confirmed_by` (mockup "waktu sampai terkonfirmasi").
+- [x] **Webhook.** `POST /telegram/webhook` checks `X-Telegram-Bot-Api-Secret-Token`, ignores unknown `chat_id`, stores the raw update, returns 200 and enqueues work. — **Done**, with one deliberate change: only the fields the jobs need are stored (file id, mime, size; correction text and reply target), never the raw update, and chat text that is not a correction is not stored at all.
+- [x] **Job runner** (see decision 7). `ProcessIncomingPhoto` is idempotent per `(chat_id, message_id)`, retries 3× at 30/120/600 s, and on permanent failure replies and alerts the admin. — **Done** as a Postgres queue (`src/jobs/queue.ts`, `src/worker.ts`). *Open:* the admin alert on give-up is only a JSON log line so far; it belongs to the alerting/DailyDigest work in §4.9.
+- [x] **Download photos** with Telegram `getFile`, then compute SHA-256 and the 64-bit pHash. Needs an image library; see §6 on dependency vetting. — **Done** with `sharp` 0.35.5 (pinned, vetted).
+- [x] **Object storage.** Upload the original photo before the DB transaction and discard the path if the transaction fails (LLD §9). — **Done** for local disk (atomic write: temp file + fsync + link); the file is deleted after a failed save only when no attachment points at it. An S3-compatible adapter behind `ObjectStorage` is still open.
+- [x] **OCR adapter** (`vision|openai|gemini`, two stages, structured output):
   - strip code fences, 60 s timeout
   - unparseable JSON → `tidak_terbaca`; transport error → `ocr_error` with retry
   - **Resolve the contract mismatch first** (§5.10).
-- [ ] **V8–V10 (need the database):**
+  - **Done** for OpenAI-compatible endpoints (`src/intake/ocr.ts`). Contract resolved: stage 1 `doc_type` ∈ `nota|faktur|kwitansi|bukti_transfer|invoice|bukan_dokumen` (anything else → `bukan_dokumen`); stage 2 money may be text or a number; `doc_number` / `invoice_number` are aliases. *Verified only against a fake server.*
+- [x] **V8–V10 (need the database):**
   - V8: SHA-256 per company, checked before OCR
   - V9: pHash ≤ 6 within 90 days on the same site
   - V10: vendor trigram match ≥ 0.6, which needs the `pg_trgm` extension
   - default-category fallback (LLD §6)
-- [ ] **Single-transaction write** of row + attachment + intake_event. Reply only after commit; if the reply fails, set `outcome = tersimpan_tanpa_balasan`.
-- [ ] **Reply builder** that never includes bank account or NPWP (HLD §8, UU 27/2022). Test it.
-- [ ] **`ProcessCorrection`:**
+- [x] **Single-transaction write** of row + attachment + intake_event. Reply only after commit; if the reply fails, set `outcome = tersimpan_tanpa_balasan`.
+- [x] **Reply builder** that never includes bank account or NPWP (HLD §8, UU 27/2022). Test it.
+- [x] **`ProcessCorrection`:**
   - resolve `row_id` (from the reply or `#xxxx`)
   - `UPDATE … WHERE row_id = ? AND company_id = ?`, recompute V4/V5 on `TOTAL`
   - refuse changes to `terkonfirmasi` rows
   - create a draft vendor on an unknown `VENDOR`
   - write an audit entry; ignore senders who are not members
-- [ ] **Review API:** `GET /intake/review` and `PATCH /intake/{row_id}`. The same validation and audit path as chat.
+  - **Done.** Corrections of one chat run in arrival order (`jobs.serial_key`); `#xxxx` also finds rows closed in the last 30 days (answered "sudah dikonfirmasi"); a reply to another bot's message is ignored silently.
+- [x] **Review API:** `GET /intake/review` and `PATCH /intake/{row_id}`. The same validation and audit path as chat. — **Done** (`/companies/:companyId/intake/*`, `applyChanges()` in a savepoint for both channels); NPWP read from the receipt is returned to finance and managers only.
 - [ ] **Golden set:** a manual integration run over 30 real photos, with results stored in `test/golden/results.csv` (LLD §10).
 
 ### 4.5 Procurement (Phase 3) — L
