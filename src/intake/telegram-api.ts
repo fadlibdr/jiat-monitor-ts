@@ -19,6 +19,16 @@ export class FileTooBigError extends TelegramError {
   override readonly name = 'FileTooBigError';
 }
 
+/**
+ * The chat refuses messages from the bot (403: blocked, never started, kicked; 400: chat not found,
+ * user deactivated). Retrying cannot help until the person acts; a 429 or 5xx is NOT this.
+ */
+export class RecipientUnreachableError extends TelegramError {
+  override readonly name = 'RecipientUnreachableError';
+}
+
+const UNREACHABLE_400 = /chat not found|user is deactivated|have no rights to send|not enough rights/i;
+
 type Fetch = typeof fetch;
 
 export class TelegramBotApi implements TelegramApi {
@@ -74,7 +84,11 @@ export class TelegramBotApi implements TelegramApi {
     } catch {
       throw new TelegramError(`${method}: HTTP ${res.status}, body bukan JSON`);
     }
-    if (!json.ok || json.result === undefined) throw new TelegramError(`${method}: ${json.description ?? `HTTP ${res.status}`}`);
+    if (!json.ok || json.result === undefined) {
+      const reason = `${method}: ${json.description ?? `HTTP ${res.status}`}`;
+      if (res.status === 403 || (res.status === 400 && UNREACHABLE_400.test(json.description ?? ''))) throw new RecipientUnreachableError(reason);
+      throw new TelegramError(reason);
+    }
     return json.result;
   }
 

@@ -138,18 +138,32 @@ export function registerHoldingRoutes(app: App, { db, now }: RouteDeps): void {
 
   /**
    * "Segarkan data": rebuilds every company's snapshot now. Recomputing is not a write a viewer
-   * makes to anyone's data, so read-only holding viewers may press it; at most once per minute.
+   * makes to anyone's data, so read-only holding viewers may press it; at most once per minute, and
+   * never twice at the same time: a second press (double click, another viewer) while a refresh runs
+   * is answered 429 at once instead of starting another full refresh. The guard is per API process,
+   * like the sign-in rate limit (one API instance in the pilot); across processes the per-company
+   * try-lock in refreshCompany keeps two refreshes from queueing on the pool.
    */
+  let running = false;
   app.post('/holding/refresh', async (c) => {
-    const at = now();
-    const [last] = await withHoldingRead(db, (tx) => tx.select({ at: max(dashRefreshes.refreshedAt) }).from(dashRefreshes));
-    const waitMs = last?.at ? HOLDING_REFRESH_MIN_INTERVAL_MS - (at.getTime() - last.at.getTime()) : 0;
-    if (waitMs > 0) {
-      return c.json({ error: 'too_many_requests', message: 'Data baru saja disegarkan; coba lagi sebentar.' }, 429, { 'Retry-After': String(Math.ceil(waitMs / 1000)) });
+    if (running) return tooSoon(c, 'Data sedang disegarkan; tunggu sebentar.', HOLDING_REFRESH_MIN_INTERVAL_MS);
+    running = true;
+    try {
+      const at = now();
+      const [last] = await withHoldingRead(db, (tx) => tx.select({ at: max(dashRefreshes.refreshedAt) }).from(dashRefreshes));
+      const waitMs = last?.at ? HOLDING_REFRESH_MIN_INTERVAL_MS - (at.getTime() - last.at.getTime()) : 0;
+      if (waitMs > 0) return tooSoon(c, 'Data baru saja disegarkan; coba lagi sebentar.', waitMs);
+      const r = await refreshAll(db, at);
+      // which companies are still on their previous snapshot; the reason goes to the worker/API logs, not to the viewer
+      return c.json({ data: { companies: r.companies, refreshed: r.refreshed, skipped: r.skipped, staleCompanyIds: r.failed.map((f) => f.companyId), refreshedAt: at.toISOString() } });
+    } finally {
+      running = false;
     }
-    const result = await refreshAll(db, at);
-    return c.json({ data: { ...result, refreshedAt: at.toISOString() } });
   });
+}
+
+function tooSoon(c: Context, message: string, waitMs: number) {
+  return c.json({ error: 'too_many_requests', message }, 429, { 'Retry-After': String(Math.ceil(waitMs / 1000)) });
 }
 
 /** `%` and `_` typed by the user are literal characters, not wildcards. */

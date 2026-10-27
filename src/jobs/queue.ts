@@ -187,8 +187,14 @@ export const ERROR_TEXT_MAX = 1000;
  * not copy parameter values (row data) into logs.
  */
 export function errorText(e: unknown): string {
-  let root: unknown = e;
-  for (let depth = 0; depth < 5 && root instanceof Error && root.cause instanceof Error; depth++) root = root.cause;
-  const s = root instanceof Error ? `${root.name}: ${root.message}` : String(root);
+  const innermost = (x: unknown) => {
+    let root: unknown = x;
+    for (let depth = 0; depth < 5 && root instanceof Error && root.cause instanceof Error; depth++) root = root.cause;
+    return root instanceof Error ? `${root.name}: ${root.message}` : String(root);
+  };
+  // AggregateError (several companies failed): its own message says how many, the entries say why
+  const s = e instanceof AggregateError
+    ? `${e.name}: ${e.message} [${e.errors.map((x) => `${x instanceof Error ? x.message : String(x)}: ${innermost(x)}`).join('; ')}]`
+    : innermost(e);
   return s.length > ERROR_TEXT_MAX ? `${s.slice(0, ERROR_TEXT_MAX)}…` : s;
 }

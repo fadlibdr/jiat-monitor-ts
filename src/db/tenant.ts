@@ -34,12 +34,38 @@ export function siteScopeFor(role: string, siteIds: number[] | null): number[] |
 }
 
 /**
+ * `snapshot`: every statement of the transaction reads one snapshot (REPEATABLE READ) instead of a
+ * fresh one per statement — for code that reads many tables and must not see half of a concurrent
+ * write (dashboards). `readOnly` additionally refuses writes.
+ */
+export interface TxMode {
+  snapshot?: boolean;
+  readOnly?: boolean;
+}
+
+/** undefined when nothing is asked: drizzle sends a bare (invalid) "SET TRANSACTION" for an empty config. */
+const txConfig = (m: TxMode) => (m.snapshot || m.readOnly
+  ? { ...(m.snapshot ? { isolationLevel: 'repeatable read' as const } : {}), ...(m.readOnly ? { accessMode: 'read only' as const } : {}) }
+  : undefined);
+
+/** Rows of a raw `tx.execute()`: postgres-js returns the array itself, PGlite an object with `rows`. */
+export function rowsOf<T>(result: unknown): T[] {
+  return Array.isArray(result) ? (result as T[]) : ((result as { rows?: T[] }).rows ?? []);
+}
+
+/** Postgres refused a REPEATABLE READ write because a concurrent transaction changed the row first. */
+export function isSerializationFailure(e: unknown): boolean {
+  const code = (e as { code?: string; cause?: { code?: string } })?.cause?.code ?? (e as { code?: string })?.code;
+  return code === '40001';
+}
+
+/**
  * Runs `fn` in a transaction as the restricted app role with app.company_id set.
  * Every query inside sees only that company's rows and can only write rows of that company —
  * enforced by Postgres, so a forgotten filter, a queue job, or a raw SQL string cannot leak.
  * SET LOCAL ends with the transaction; the pooled connection returns clean.
  */
-export async function withCompany<T>(db: Db, ctx: number | TenantCtx, fn: (tx: Tx) => Promise<T>): Promise<T> {
+export async function withCompany<T>(db: Db, ctx: number | TenantCtx, fn: (tx: Tx) => Promise<T>, mode: TxMode = {}): Promise<T> {
   const { companyId, userId = null, siteIds = null } = typeof ctx === 'number' ? { companyId: ctx } : ctx;
   if (!Number.isInteger(companyId) || companyId <= 0) throw new MissingCompanyContext(`company_id tidak valid: ${companyId}`);
   if (userId !== null && (!Number.isInteger(userId) || userId <= 0)) throw new MissingCompanyContext(`user_id tidak valid: ${userId}`);
@@ -51,16 +77,19 @@ export async function withCompany<T>(db: Db, ctx: number | TenantCtx, fn: (tx: T
                                 set_config('app.site_scope', ${siteIds === null ? 'all' : 'list'}, true),
                                 set_config('app.site_ids', ${siteIds === null ? '' : siteIds.join(',')}, true)`);
     return fn(tx as Tx);
-  });
+  }, txConfig(mode));
 }
 
-/** Read-only across all companies. The caller must have passed the holding gate (http/app.ts `requireHolding`). */
+/**
+ * Read-only across all companies, in one snapshot: the dash_* tables of a refresh that commits
+ * meanwhile are seen entirely or not at all. The caller must have passed the holding gate
+ * (http/app.ts `requireHolding`).
+ */
 export async function withHoldingRead<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL ROLE ${HOLDING_ROLE}`));
-    await tx.execute(sql`SET LOCAL transaction_read_only = on`);
     return fn(tx as Tx);
-  });
+  }, txConfig({ snapshot: true, readOnly: true }));
 }
 
 /**

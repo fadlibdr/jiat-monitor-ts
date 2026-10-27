@@ -7,7 +7,9 @@ import { createApp } from '../../src/http/app.js';
 import type { TelegramApi } from '../../src/intake/telegram-api.js';
 import { runOnce } from '../../src/jobs/queue.js';
 import { opsRegistry } from '../../src/ops/registry.js';
-import { LINK_CODE_LENGTH, LINK_CODE_TTL_MS, LINK_REPLY, newLinkCode } from '../../src/ops/telegram-link.js';
+import {
+  INVALID_REPLY_EVERY_MS, LINK_CODE_KEEP_MS, LINK_CODE_LENGTH, LINK_CODE_TTL_MS, LINK_REPLY, newLinkCode, purgeLinkCodes,
+} from '../../src/ops/telegram-link.js';
 import { createTestDb } from '../helpers/db.js';
 
 const SECRET = 'whsec-link-0123456789abcdefghijkl';
@@ -120,5 +122,27 @@ describe('linking a Telegram account with "/start <code>"', () => {
     expect(await sendStart('halo bot', TG_ANA)).toBe(200);
     expect(await sendStart('/start', TG_ANA)).toBe(200);
     expect(await withApp(db, (tx) => tx.select().from(jobs).orderBy(asc(jobs.id)))).toEqual([]);
+  });
+
+  it('a stream of wrong codes gets one answer per account per hour, not one job per message', async () => {
+    for (let i = 0; i < 20; i++) await sendStart(`/start WRONG${String(i).padStart(4, '0')}`, TG_BUDI);
+    await sendStart('/start WRONGCODE1', TG_ANA);
+    const queued = async () => (await withApp(db, (tx) => tx.select().from(jobs))).length;
+    expect(await queued()).toBe(2);
+    now = new Date(now.getTime() + INVALID_REPLY_EVERY_MS);
+    await sendStart('/start WRONGCODE2', TG_BUDI);
+    expect(await queued()).toBe(3);
+    // a right code is always answered
+    const { code } = await codeFor(budi);
+    await sendStart(`/start ${code}`, TG_BUDI);
+    expect(await queued()).toBe(4);
+  });
+
+  it('link codes are purged a day after they expire, not before', async () => {
+    await codeFor(ana);
+    const purgeAt = (ms: number) => purgeLinkCodes(db, new Date(now.getTime() + ms));
+    expect(await purgeAt(LINK_CODE_TTL_MS + LINK_CODE_KEEP_MS - 1)).toBe(0);
+    expect(await purgeAt(LINK_CODE_TTL_MS + LINK_CODE_KEEP_MS + 1)).toBe(1);
+    expect(await withApp(db, (tx) => tx.select().from(telegramLinkCodes))).toEqual([]);
   });
 });

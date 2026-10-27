@@ -408,13 +408,19 @@ export const documentSequences = pgTable('document_sequences', {
   ...timestamps,
 }, (t) => [primaryKey({ columns: [t.companyId, t.docType, t.year] })]);
 
+/**
+ * Width of PR/PO/GR/INV numbers: the longest formatDocNumber() can build (prefix 12 + type + site
+ * code 20 + year + sequence) is under 50 characters, so a valid company/site never hits the limit.
+ */
+export const DOC_NUMBER_MAX = 64;
+
 export const PR_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'closed'] as const;
 export const purchaseRequests = pgTable('purchase_requests', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
   siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
   contractId: bigint('contract_id', { mode: 'number' }).references(() => contracts.id),
-  number: varchar('number', { length: 40 }).notNull(),
+  number: varchar('number', { length: DOC_NUMBER_MAX }).notNull(),
   requestedBy: bigint('requested_by', { mode: 'number' }),
   neededBy: date('needed_by'),
   status: varchar('status', { length: 12 }).notNull().default('draft').$type<(typeof PR_STATUSES)[number]>(),
@@ -446,7 +452,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
   vendorId: bigint('vendor_id', { mode: 'number' }).notNull().references(() => vendors.id),
   prId: bigint('pr_id', { mode: 'number' }).references(() => purchaseRequests.id),
   contractId: bigint('contract_id', { mode: 'number' }).references(() => contracts.id),
-  number: varchar('number', { length: 40 }).notNull(),
+  number: varchar('number', { length: DOC_NUMBER_MAX }).notNull(),
   orderDate: date('order_date').notNull(),
   expectedDate: date('expected_date'),
   ppnRateBp: integer('ppn_rate_bp').notNull().default(1100),
@@ -486,13 +492,18 @@ export const goodsReceipts = pgTable('goods_receipts', {
   /** copied from the PO, so the site scope applies without a join */
   siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
   poId: bigint('po_id', { mode: 'number' }).notNull().references(() => purchaseOrders.id),
-  number: varchar('number', { length: 40 }).notNull(),
+  number: varchar('number', { length: DOC_NUMBER_MAX }).notNull(),
   receivedAt: date('received_at').notNull(),
   receivedBy: bigint('received_by', { mode: 'number' }),
   note: text('note'),
+  /** Idempotency-Key of the POST that created it: a resubmitted form returns this receipt instead of receiving twice */
+  idempotencyKey: varchar('idempotency_key', { length: 64 }),
   ...authorship,
   ...timestamps,
-}, (t) => [uniqueIndex('goods_receipts_company_number').on(t.companyId, t.number), index('goods_receipts_po').on(t.poId)]);
+}, (t) => [
+  uniqueIndex('goods_receipts_company_number').on(t.companyId, t.number), index('goods_receipts_po').on(t.poId),
+  uniqueIndex('goods_receipts_company_idempotency').on(t.companyId, t.idempotencyKey),
+]);
 
 export const goodsReceiptItems = pgTable('goods_receipt_items', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -546,7 +557,7 @@ export const salesInvoices = pgTable('sales_invoices', {
   siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
   contractId: bigint('contract_id', { mode: 'number' }).notNull().references(() => contracts.id),
   termId: bigint('term_id', { mode: 'number' }).notNull().references(() => contractTerms.id),
-  number: varchar('number', { length: 40 }).notNull(),
+  number: varchar('number', { length: DOC_NUMBER_MAX }).notNull(),
   invoiceDate: date('invoice_date').notNull(),
   dueDate: date('due_date').notNull(),
   /** weighted physical progress (approved) when the invoice was issued, micro-percent */
@@ -581,9 +592,14 @@ export const payments = pgTable('payments', {
   method: varchar('method', { length: 12 }).notNull().$type<(typeof PAYMENT_METHODS)[number]>(),
   reference: varchar('reference', { length: 100 }),
   note: text('note'),
+  /** Idempotency-Key of the POST that created it: a double submit or a client retry returns this payment instead of paying twice */
+  idempotencyKey: varchar('idempotency_key', { length: 64 }),
   ...authorship,
   ...timestamps,
-}, (t) => [index('payments_payable').on(t.payableType, t.payableId), index('payments_company_paid').on(t.companyId, t.paidAt)]);
+}, (t) => [
+  index('payments_payable').on(t.payableType, t.payableId), index('payments_company_paid').on(t.companyId, t.paidAt),
+  uniqueIndex('payments_company_idempotency').on(t.companyId, t.idempotencyKey),
+]);
 
 /**
  * Dashboard snapshots (LLD §8). The LLD's materialized views are implemented as tables written by
@@ -735,6 +751,10 @@ export const dailyDigests = pgTable('daily_digests', {
   alertKeys: jsonb('alert_keys').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   recipients: integer('recipients').notNull().default(0),
   sentAt: timestamp('sent_at', { withTimezone: true }),
+  /** a worker sending this digest holds it until then; a crashed worker's claim lapses */
+  claimedUntil: timestamp('claimed_until', { withTimezone: true }),
+  /** chats that already received it: a retry after a partial send skips them */
+  deliveredChatIds: jsonb('delivered_chat_ids').$type<number[]>().notNull().default(sql`'[]'::jsonb`),
   ...timestamps,
 }, (t) => [uniqueIndex('daily_digests_company_date').on(t.companyId, t.digestDate)]);
 

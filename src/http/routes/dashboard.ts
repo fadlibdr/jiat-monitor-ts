@@ -41,7 +41,8 @@ export function registerDashboardRoutes(app: App, { db, now }: RouteDeps): void 
   app.get('/companies/:companyId/dashboard', async (c) => {
     const today = now();
     const f = parsePeriods(c, today);
-    const rows = await withCompany(db, c.get('tenant'), (tx) => computeSnapshot(tx, c.get('companyId'), today));
+    // one snapshot for the ~25 reads, so a termin issued or a payment recorded meanwhile is seen everywhere or nowhere
+    const rows = await withCompany(db, c.get('tenant'), (tx) => computeSnapshot(tx, c.get('companyId'), today), { snapshot: true, readOnly: true });
     const panels = buildPanels(rows, f, today);
     const money = FINANCE_ROLES.includes(c.get('role'));
     return c.json({

@@ -1,4 +1,4 @@
-import { and, isNotNull, lt } from 'drizzle-orm';
+import { and, eq, isNotNull, lt } from 'drizzle-orm';
 import { attachments, companies, jobs } from '../db/schema.js';
 import { withApp, withCompany, type Db } from '../db/tenant.js';
 import type { ObjectStorage } from '../intake/storage.js';
@@ -36,13 +36,22 @@ export async function purgeOrphanPhotos(deps: PurgeDeps, now: Date): Promise<{ s
     for await (const o of list(`company-${id}/intake/`)) {
       scanned++;
       if (now.getTime() - o.modifiedAt.getTime() < ORPHAN_MIN_AGE_MS) continue;
-      if (!o.key.endsWith('.tmp') && referenced.has(o.key)) continue;
+      if (!o.key.endsWith('.tmp')) {
+        if (referenced.has(o.key)) continue;
+        // the set was read before the scan: a resent photo may have been attached to this very file since
+        if (await isAttached(deps.db, id, o.key)) continue;
+      }
       await deps.storage.delete(o.key);
       removed++;
       deps.log('purge_orphan_removed', { companyId: id, key: o.key });
     }
   }
   return { scanned, removed };
+}
+
+async function isAttached(db: Db, companyId: number, key: string): Promise<boolean> {
+  const [row] = await withCompany(db, companyId, (tx) => tx.select({ id: attachments.id }).from(attachments).where(eq(attachments.path, key)).limit(1));
+  return row !== undefined;
 }
 
 export async function purgeOldJobs(db: Db, now: Date): Promise<{ done: number; failed: number }> {

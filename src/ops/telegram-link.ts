@@ -1,8 +1,8 @@
 import { createHash, randomInt } from 'node:crypto';
-import { and, eq, gt, isNull, ne } from 'drizzle-orm';
+import { and, eq, gt, isNull, lt, ne } from 'drizzle-orm';
 import { telegramLinkCodes, users } from '../db/schema.js';
 import { withApp, type Db } from '../db/tenant.js';
-import { enqueue } from '../jobs/queue.js';
+import { enqueue, enqueueOnce } from '../jobs/queue.js';
 
 /**
  * Self-service link between a user and their Telegram account (docs/remaining-work.md §4.1): needed
@@ -65,7 +65,24 @@ export async function redeemLinkCode(db: Db, code: string, telegramUserId: numbe
       }
     }
     // in a private chat the chat id is the user id
-    await enqueue(tx, { kind: JOB_TELEGRAM_SEND, companyId: null, payload: { chatId: telegramUserId, text: LINK_REPLY[outcome] }, maxAttempts: 3 });
+    const reply = { kind: JOB_TELEGRAM_SEND, companyId: null, payload: { chatId: telegramUserId, text: LINK_REPLY[outcome] }, maxAttempts: 3 };
+    if (outcome === 'invalid') {
+      // anyone can send "/start <anything>": answer a wrong code at most once an hour per account, so
+      // a script cannot fill the job queue or spend the bot's send budget the intake replies need
+      await enqueueOnce(tx, { ...reply, dedupeKey: `link-invalid:${telegramUserId}:${Math.floor(now.getTime() / INVALID_REPLY_EVERY_MS)}` });
+    } else {
+      await enqueue(tx, reply);
+    }
     return outcome;
   });
+}
+
+export const INVALID_REPLY_EVERY_MS = 60 * 60_000;
+/** Used and expired codes are kept a day (for support questions), then purged. */
+export const LINK_CODE_KEEP_MS = 86_400_000;
+
+export async function purgeLinkCodes(db: Db, now: Date): Promise<number> {
+  const gone = await withApp(db, (tx) => tx.delete(telegramLinkCodes)
+    .where(lt(telegramLinkCodes.expiresAt, new Date(now.getTime() - LINK_CODE_KEEP_MS))).returning({ code: telegramLinkCodes.codeHash }));
+  return gone.length;
 }

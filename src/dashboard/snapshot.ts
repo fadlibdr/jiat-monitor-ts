@@ -8,7 +8,9 @@ import {
   dashRefreshes, dashVendors, goodsReceiptItems, goodsReceipts, intakeEvents, payments, purchaseOrderItems, purchaseOrders,
   purchaseRequests, salesInvoices, sites, vendorInvoices, vendors,
 } from '../db/schema.js';
-import { withApp, withCompany, type Db, type Tx } from '../db/tenant.js';
+import type { PgTable } from 'drizzle-orm/pg-core';
+import { isSerializationFailure, rowsOf, withApp, withCompany, type Db, type Tx } from '../db/tenant.js';
+import { errorText } from '../jobs/queue.js';
 import { payables, receivables } from '../finance/service.js';
 import { REVIEW_FLAGS } from '../intake/review.js';
 import { commitments } from '../procurement/service.js';
@@ -236,38 +238,70 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
   return { contracts: contractRows, progress: progressRows, monthly: [...monthly.values()], balances: balanceRows, vendors: [...vendorAgg.values()], alerts };
 }
 
-/** Replaces a company's snapshot in one transaction: readers see the old or the new, never a mix. */
-export async function refreshCompany(db: Db, companyId: number, now: Date): Promise<void> {
-  await withCompany(db, companyId, async (tx) => {
-    // two refreshes of one company (scheduled job + POST /holding/refresh) run one after the other
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${DASH_LOCK}, ${companyId}::int)`);
-    const s = await computeSnapshot(tx, companyId, now);
-    for (const t of [dashProgress, dashContracts, dashMonthly, dashBalances, dashVendors, dashAlerts]) await tx.delete(t);
-    if (s.contracts.length) await tx.insert(dashContracts).values(s.contracts);
-    if (s.progress.length) await tx.insert(dashProgress).values(s.progress);
-    if (s.monthly.length) await tx.insert(dashMonthly).values(s.monthly);
-    if (s.balances.length) await tx.insert(dashBalances).values(s.balances);
-    if (s.vendors.length) await tx.insert(dashVendors).values(s.vendors);
-    if (s.alerts.length) await tx.insert(dashAlerts).values(s.alerts);
-    await tx.insert(dashRefreshes).values({ companyId, refreshedAt: now })
-      .onConflictDoUpdate({ target: dashRefreshes.companyId, set: { refreshedAt: now } });
-  });
+/**
+ * Replaces a company's snapshot in one transaction: readers see the old or the new, never a mix.
+ * It reads the source tables in one snapshot (REPEATABLE READ), so the rows agree with each other.
+ * When another refresh of the company is running (scheduled job + POST /holding/refresh), this one
+ * steps aside instead of queueing behind it on a pooled connection: the running one is as fresh.
+ * Returns false when it stepped aside.
+ */
+export async function refreshCompany(db: Db, companyId: number, now: Date): Promise<boolean> {
+  try {
+    return await withCompany(db, companyId, (tx) => writeSnapshot(tx, companyId, now), { snapshot: true });
+  } catch (e) {
+    // a refresh that committed between our snapshot and our lock: its rows are newer than ours would be
+    if (isSerializationFailure(e)) return false;
+    throw e;
+  }
+}
+
+/** Rows per INSERT: far below Postgres' 65,534 bind parameters for the widest dash_* row. */
+export const INSERT_CHUNK = 1_000;
+
+async function writeSnapshot(tx: Tx, companyId: number, now: Date): Promise<boolean> {
+  const [lock] = rowsOf<{ ok: boolean }>(await tx.execute(sql`SELECT pg_try_advisory_xact_lock(${DASH_LOCK}, ${companyId}::int) AS ok`));
+  if (!lock?.ok) return false;
+  const s = await computeSnapshot(tx, companyId, now);
+  for (const t of [dashProgress, dashContracts, dashMonthly, dashBalances, dashVendors, dashAlerts]) await tx.delete(t);
+  await insertChunked(tx, dashContracts, s.contracts);
+  await insertChunked(tx, dashProgress, s.progress);
+  await insertChunked(tx, dashMonthly, s.monthly);
+  await insertChunked(tx, dashBalances, s.balances);
+  await insertChunked(tx, dashVendors, s.vendors);
+  await insertChunked(tx, dashAlerts, s.alerts);
+  await tx.insert(dashRefreshes).values({ companyId, refreshedAt: now })
+    .onConflictDoUpdate({ target: dashRefreshes.companyId, set: { refreshedAt: now } });
+  return true;
+}
+
+async function insertChunked<T extends PgTable>(tx: Tx, table: T, rows: Array<T['$inferInsert']>): Promise<void> {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) await tx.insert(table).values(rows.slice(i, i + INSERT_CHUNK));
+}
+
+export interface RefreshSummary {
+  companies: number;
+  refreshed: number;
+  /** another refresh of the company was running */
+  skipped: number;
+  /** company id → why (errorText: the database's reason, never row data) */
+  failed: Array<{ companyId: number; error: string }>;
 }
 
 /**
  * RefreshDashboards (LLD §9, every 15 minutes): every company, each in its own transaction. One
- * company failing does not stop the others; the failures are reported together at the end.
+ * company failing does not stop the others; the caller decides what a failure means (the job fails
+ * so it is retried and logged, the HTTP refresh reports which companies are stale).
  */
-export async function refreshAll(db: Db, now: Date): Promise<{ companies: number }> {
+export async function refreshAll(db: Db, now: Date): Promise<RefreshSummary> {
   const ids = await withApp(db, (tx) => tx.select({ id: companies.id }).from(companies));
-  const failures: Error[] = [];
+  const out: RefreshSummary = { companies: ids.length, refreshed: 0, skipped: 0, failed: [] };
   for (const { id } of ids) {
     try {
-      await refreshCompany(db, id, now);
+      if (await refreshCompany(db, id, now)) out.refreshed++;
+      else out.skipped++;
     } catch (err) {
-      failures.push(new Error(`company ${id}`, { cause: err }));
+      out.failed.push({ companyId: id, error: errorText(err) });
     }
   }
-  if (failures.length) throw new AggregateError(failures, `dashboard refresh failed for ${failures.length} of ${ids.length} companies`);
-  return { companies: ids.length };
+  return out;
 }

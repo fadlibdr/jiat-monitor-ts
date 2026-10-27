@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { link, mkdir, open, readdir, readFile, rm, stat, utimes } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -47,6 +47,10 @@ export class LocalDiskStorage implements ObjectStorage {
         await link(tmp, path);
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        // the same photo again (an earlier save that never committed left it): make it look new, so
+        // the orphan sweep's one-day grace starts over for the attachment about to reference it
+        const at = new Date();
+        await utimes(path, at, at);
       }
     } finally {
       await rm(tmp, { force: true });

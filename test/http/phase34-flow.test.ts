@@ -235,6 +235,16 @@ describe('dashboards', () => {
 
   it('a minute later refresh is allowed again', async () => {
     now = new Date(now.getTime() + 61_000);
-    expect((await app.request('/holding/refresh', send(boss, 'POST'))).status).toBe(200);
+    const res = await app.request('/holding/refresh', send(boss, 'POST'));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: unknown }).data).toMatchObject({ companies: 1, refreshed: 1, skipped: 0, staleCompanyIds: [] });
+  });
+
+  it('two presses at the same time run ONE refresh: the second is answered 429 at once', async () => {
+    now = new Date(now.getTime() + 61_000);
+    const [a, b] = await Promise.all([app.request('/holding/refresh', send(boss, 'POST')), app.request('/holding/refresh', send(boss, 'POST'))]);
+    expect([a.status, b.status].sort()).toEqual([200, 429]);
+    const refused = a.status === 429 ? a : b;
+    expect(((await refused.json()) as { message: string }).message).toMatch(/sedang disegarkan/);
   });
 });
