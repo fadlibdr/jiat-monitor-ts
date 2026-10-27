@@ -11,6 +11,8 @@ import type { Cents } from './money.js';
  *  - uang muka is recovered in proportion to the termin percent, the last termin taking the rest;
  *  - retensi = termin DPP × retention rate, withheld from the payment;
  *  - PPN is charged on (termin DPP − uang muka recovered): the advance was taxed when it was paid;
+ *  - the last termin also takes the rest of retensi and PPN, so over the schedule they add up to the
+ *    contract's (effective DPP × retention rate, and (effective DPP − uang muka) × PPN rate) exactly;
  *  - amount due = termin DPP − uang muka recovered − retensi + PPN.
  */
 export interface TermInvoiceInput {
@@ -22,6 +24,8 @@ export interface TermInvoiceInput {
   /** totals over the termin invoices already issued for this contract */
   previousDppCents: Cents;
   previousAdvanceDeductionCents: Cents;
+  previousRetentionCents: Cents;
+  previousPpnCents: Cents;
   /** this is the last termin of a schedule whose percents add up to 100 % */
   isLastTerm: boolean;
 }
@@ -38,8 +42,12 @@ export function termInvoiceAmounts(i: TermInvoiceInput): TermInvoiceAmounts {
   const advanceDeductionCents = i.isLastTerm
     ? i.advanceCents - i.previousAdvanceDeductionCents
     : mulDiv(i.advanceCents, i.termPercentBp, BP_100);
-  const retentionCents = mulDiv(dppCents, i.retentionBp, BP_100);
-  const ppnCents = mulDiv(dppCents - advanceDeductionCents, i.ppnRateBp, BP_100);
+  const retentionCents = i.isLastTerm
+    ? mulDiv(i.effectiveDppCents, i.retentionBp, BP_100) - i.previousRetentionCents
+    : mulDiv(dppCents, i.retentionBp, BP_100);
+  const ppnCents = i.isLastTerm
+    ? mulDiv(i.effectiveDppCents - i.advanceCents, i.ppnRateBp, BP_100) - i.previousPpnCents
+    : mulDiv(dppCents - advanceDeductionCents, i.ppnRateBp, BP_100);
   return { dppCents, advanceDeductionCents, retentionCents, ppnCents, totalCents: dppCents - advanceDeductionCents - retentionCents + ppnCents };
 }
 

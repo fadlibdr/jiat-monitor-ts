@@ -1,13 +1,13 @@
 import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { PAYABLE_TYPES, PAYMENT_METHODS, payments, SALES_INVOICE_STATUSES, salesInvoices } from '../../db/schema.js';
+import { PAYMENT_METHODS, payments, SALES_INVOICE_STATUSES, salesInvoices, vendorInvoices } from '../../db/schema.js';
 import { withCompany } from '../../db/tenant.js';
 import { AGING_BUCKETS } from '../../domain/invoice.js';
 import {
-  cancelSalesInvoice, issueTermInvoice, payables, receivables, recordPayment, termsStatus,
+  cancelSalesInvoice, issueTermInvoice, payables, publicPayment, receivables, recordPayment, termsStatus, vendorRowIds,
 } from '../../finance/service.js';
 import { findContract } from './company.js';
-import { ContractParams, FINANCE_ROLES, IdParam, jsonBody, requireRole, type App, type RouteDeps } from '../context.js';
+import { ContractParams, FINANCE_ROLES, IdParam, idempotencyKey, jsonBody, requireRole, type App, type RouteDeps } from '../context.js';
 
 const FromTermBody = z.object({ contractId: IdParam, termId: IdParam, invoiceDate: z.iso.date() });
 const Payment = z.object({
@@ -22,7 +22,12 @@ const PaymentBody = z.discriminatedUnion('payableType', [
   Payment.extend({ payableType: z.literal('vendor_invoices'), rowRef: z.uuid() }),
 ]);
 const InvoiceQuery = z.object({ contractId: IdParam.optional(), status: z.enum(SALES_INVOICE_STATUSES).optional() });
-const PaymentQuery = z.object({ payableType: z.enum(PAYABLE_TYPES).optional(), payableId: IdParam.optional() });
+/** rowRef needs payableType: a sales invoice id and a vendor invoice row_id are different kinds of reference */
+const PaymentQuery = z.discriminatedUnion('payableType', [
+  z.object({ payableType: z.literal('sales_invoices'), rowRef: IdParam.optional() }),
+  z.object({ payableType: z.literal('vendor_invoices'), rowRef: z.uuid().optional() }),
+  z.object({ payableType: z.undefined().optional(), rowRef: z.undefined().optional() }),
+]);
 const DocParams = z.object({ companyId: IdParam, id: IdParam });
 
 /**
@@ -64,17 +69,28 @@ export function registerFinanceRoutes(app: App, { db, now }: RouteDeps): void {
 
   app.post('/companies/:companyId/payments', finance, async (c) => {
     const body = await jsonBody(c, PaymentBody);
-    const row = await withCompany(db, c.get('tenant'), (tx) => recordPayment(tx, { companyId: c.get('companyId') }, body));
-    return c.json({ data: row }, 201);
+    const key = idempotencyKey(c);
+    const { replayed, ...row } = await withCompany(db, c.get('tenant'), (tx) => recordPayment(tx, { companyId: c.get('companyId') }, body, key));
+    return c.json({ data: row }, replayed ? 200 : 201);
   });
+  /** ?payableType=sales_invoices&rowRef=<id> or ?payableType=vendor_invoices&rowRef=<row_id> */
   app.get('/companies/:companyId/payments', finance, async (c) => {
     const q = PaymentQuery.parse(c.req.query());
-    const where: SQL[] = [];
-    if (q.payableType) where.push(eq(payments.payableType, q.payableType));
-    if (q.payableId) where.push(eq(payments.payableId, q.payableId));
-    const rows = await withCompany(db, c.get('tenant'), (tx) =>
-      tx.select().from(payments).where(where.length ? and(...where) : undefined).orderBy(desc(payments.paidAt), desc(payments.id)));
-    return c.json({ data: rows });
+    const data = await withCompany(db, c.get('tenant'), async (tx) => {
+      const where: SQL[] = [];
+      if (q.payableType) where.push(eq(payments.payableType, q.payableType));
+      if (q.rowRef !== undefined) {
+        const id = q.payableType === 'vendor_invoices'
+          ? (await tx.select({ id: vendorInvoices.id }).from(vendorInvoices).where(eq(vendorInvoices.rowId, String(q.rowRef))))[0]?.id
+          : Number(q.rowRef);
+        if (id === undefined) return [];
+        where.push(eq(payments.payableId, id));
+      }
+      const rows = await tx.select().from(payments).where(where.length ? and(...where) : undefined).orderBy(desc(payments.paidAt), desc(payments.id));
+      const rowIdOf = await vendorRowIds(tx, rows);
+      return rows.map((p) => publicPayment(p, rowIdOf));
+    });
+    return c.json({ data });
   });
 
   app.get('/companies/:companyId/receivables', finance, async (c) => {

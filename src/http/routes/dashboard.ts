@@ -4,6 +4,7 @@ import { buildPanels } from '../../dashboard/panels.js';
 import { computeSnapshot } from '../../dashboard/snapshot.js';
 import type { AlertKind } from '../../db/schema.js';
 import { withCompany } from '../../db/tenant.js';
+import { wibMonth } from '../../domain/date.js';
 import { periodOf } from '../../domain/scurve.js';
 import { FINANCE_ROLES, IdParam, type App, type RouteDeps } from '../context.js';
 
@@ -27,7 +28,7 @@ export function parsePeriods(c: Context, today: Date) {
     period: c.req.query('period'), from: c.req.query('from'), to: c.req.query('to'),
     siteId: c.req.query('site_id') ?? c.req.query('siteId'),
   });
-  return { ...q, period: q.period ?? `${today.toISOString().slice(0, 7)}-01` };
+  return { ...q, period: q.period ?? wibMonth(today) };
 }
 
 /** Alerts that show money owed or owing: finance's and the managers' only, like the finance panel. */

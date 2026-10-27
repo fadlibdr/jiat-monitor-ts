@@ -1,3 +1,4 @@
+import { wibDate } from './date.js';
 import type { Cents } from './money.js';
 
 /**
@@ -74,11 +75,15 @@ export function effectiveContract(k: ContractBase, addendums: readonly AddendumL
   };
 }
 
-/** Whole days from `today` to `endDate` (negative when overdue); null without an end date. */
+/**
+ * Whole days from `today` to `endDate` (negative when overdue); null without an end date. Counted
+ * from today's WIB date: at 01:00 WIB it is already the next day on site, though still the previous one in UTC.
+ */
 export function daysLeft(endDate: string | null, today: Date): number | null {
   if (!endDate) return null;
   const end = Date.UTC(+endDate.slice(0, 4), +endDate.slice(5, 7) - 1, +endDate.slice(8, 10));
-  const t = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const w = wibDate(today);
+  const t = Date.UTC(+w.slice(0, 4), +w.slice(5, 7) - 1, +w.slice(8, 10));
   return Math.round((end - t) / 86_400_000);
 }
 

@@ -1,4 +1,5 @@
 import { withApp, type Db } from '../db/tenant.js';
+import { WIB_OFFSET_MS, wibDate } from '../domain/date.js';
 import { enqueueOnce } from './queue.js';
 
 /**
@@ -12,13 +13,9 @@ export type Schedule =
   /** "HH:MM" in WIB (UTC+7, no daylight saving) */
   | { kind: string; dailyAtWib: string; maxAttempts?: number };
 
-const WIB_OFFSET_MS = 7 * 3_600_000;
 const MINUTE = 60_000;
 
-/** Today's date in WIB, "YYYY-MM-DD". */
-export function wibDate(now: Date): string {
-  return new Date(now.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
-}
+export { wibDate };
 
 /** The slot `now` falls in (its dedupe key), or null while a daily job's time has not come today. */
 export function currentSlot(s: Schedule, now: Date): string | null {

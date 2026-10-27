@@ -150,8 +150,8 @@ describe('deviasi_progres', () => {
 describe('kontrak_mendekati_batas', () => {
   it('fires at 30 days left, not at 31', async () => {
     const { K, number } = await addContract(w, w.A, w.s1, { endDate: '2026-11-27' });
-    expect(await alertsOf('kontrak_mendekati_batas', `contract:${K}`, at('2026-10-27T23:59:59Z'))).toEqual([]);
-    expect(await alertsOf('kontrak_mendekati_batas', `contract:${K}`, at('2026-10-28T00:00:00Z'))).toEqual([{
+    expect(await alertsOf('kontrak_mendekati_batas', `contract:${K}`, at('2026-10-27T16:59:59Z'))).toEqual([]);
+    expect(await alertsOf('kontrak_mendekati_batas', `contract:${K}`, at('2026-10-27T17:00:00Z'))).toEqual([{
       companyId: w.A, kind: 'kontrak_mendekati_batas', ref: `contract:${K}`, siteId: w.s1,
       data: { contractId: K, contractNumber: number, endDate: '2026-11-27', daysLeft: 30, actualMicroPct: 0 },
     }]);
@@ -192,8 +192,8 @@ describe('termin_jatuh_tempo', () => {
     const { K, number } = await addContract(w, w.A, w.s1);
     const t = await addTerms(w, w.A, K, [{ seq: 1, percentBp: 10_000, triggerBp: 0 }]);
     const inv = await addSalesInvoice(w, w.A, { K, termId: t[1]!, invoiceDate: '2026-10-11', dueDate: '2026-11-10', totalCents: 1_000_000 * RP });
-    expect(await alertsOf('termin_jatuh_tempo', `invoice:${inv.id}`, at('2026-10-26T23:59:59Z'))).toEqual([]);
-    expect(await alertsOf('termin_jatuh_tempo', `invoice:${inv.id}`, at('2026-10-27T00:00:00Z'))).toEqual([{
+    expect(await alertsOf('termin_jatuh_tempo', `invoice:${inv.id}`, at('2026-10-26T16:59:59Z'))).toEqual([]);
+    expect(await alertsOf('termin_jatuh_tempo', `invoice:${inv.id}`, at('2026-10-26T17:00:00Z'))).toEqual([{
       companyId: w.A, kind: 'termin_jatuh_tempo', ref: `invoice:${inv.id}`, siteId: w.s1,
       data: {
         contractId: K, contractNumber: number, invoiceId: inv.id, invoiceNumber: inv.number, termSeq: 1, dueDate: '2026-11-10', daysLeft: 14,
@@ -232,12 +232,12 @@ describe('vendor_overdue', () => {
     const v = await addVendor(w, w.A);
     await addVendorInvoice(w, w.A, { site, vendorId: v, vendorName: 'PT Semen Papua', totalCents: 500_000 * RP, status: 'terkonfirmasi', invoiceDate: '2026-10-01', dueDate: '2026-10-27' });
     const ref = `vendor:${v}:site:${site}`;
-    expect(await alertsOf('vendor_overdue', ref, at('2026-10-27T23:59:59Z'))).toEqual([]);
-    expect(await alertsOf('vendor_overdue', ref, at('2026-10-28T00:00:00Z'))).toEqual([{
+    expect(await alertsOf('vendor_overdue', ref, at('2026-10-27T16:59:59Z'))).toEqual([]);
+    expect(await alertsOf('vendor_overdue', ref, at('2026-10-27T17:00:00Z'))).toEqual([{
       companyId: w.A, kind: 'vendor_overdue', ref, siteId: site,
       data: { vendorId: v, vendorName: 'PT Semen Papua', overdueCents: 500_000 * RP, invoices: 1, maxDaysOverdue: 1 },
     }]);
-    const bal = (await snap(w, w.A, at('2026-10-28T00:00:00Z'))).balances.find((b) => b.siteId === site);
+    const bal = (await snap(w, w.A, at('2026-10-27T17:00:00Z'))).balances.find((b) => b.siteId === site);
     expect(bal).toMatchObject({ payableTotalCents: 500_000 * RP, payableOverdueCents: 500_000 * RP });
   });
 
@@ -298,11 +298,11 @@ describe('po_lewat_30_hari', () => {
   it('an issued PO alerts when it is older than 30 days, not at 30; poOverdueCount follows', async () => {
     const site = await addSite(w, w.A);
     const po = await addPo(w, w.A, { site, vendor: w.vA1, orderDate: '2026-09-27', status: 'issued', lines: [{ qty: '10', unitPriceCents: 1000 * RP, description: 'Semen 50 kg' }] });
-    let s = await snap(w, w.A, at('2026-10-27T23:59:59Z'));
+    let s = await snap(w, w.A, at('2026-10-27T16:59:59Z'));
     expect(s.alerts.filter((a) => a.ref === `po:${po.id}`)).toEqual([]);
     expect(s.balances.find((b) => b.siteId === site)).toMatchObject({ poOverdueCount: 0, poOutstandingCents: 10_000 * RP });
 
-    s = await snap(w, w.A, at('2026-10-28T00:00:00Z'));
+    s = await snap(w, w.A, at('2026-10-27T17:00:00Z'));
     expect(s.alerts.filter((a) => a.ref === `po:${po.id}`)).toEqual([{
       companyId: w.A, kind: 'po_lewat_30_hari', ref: `po:${po.id}`, siteId: site,
       data: { poId: po.id, poNumber: po.number, vendorName: 'PT Sumber Beton', firstItem: 'Semen 50 kg', ageDays: 31, outstandingCents: 10_000 * RP },

@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { daysLeft, effectiveContract } from '../domain/contract.js';
+import { wibDate } from '../domain/date.js';
 import { agingBucket, termInvoiceAmounts, type AgingBucket } from '../domain/invoice.js';
 import { BP_100 } from '../domain/contract.js';
 import {
@@ -38,7 +39,9 @@ export async function termsStatus(tx: Tx, contractId: number) {
  * invoiced yet (termin are billed in order, so "previous" totals are well-defined).
  */
 export async function issueTermInvoice(tx: Tx, actor: { companyId: number; userId: number }, input: { contractId: number; termId: number; invoiceDate: string }) {
-  const [k] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).for('update');
+  // NO KEY UPDATE: serializes issue/cancel/approve of one contract without blocking the KEY SHARE
+  // locks that inserts referencing the contract take (PUT terms, PR/PO, reports) — no deadlock with them
+  const [k] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).for('no key update');
   if (!k) throw new HTTPException(404, { message: 'Kontrak tidak ditemukan pada perusahaan ini.' });
   const { terms, actualMicroPct } = await termsStatus(tx, k.id);
   const term = terms.find((t) => t.id === input.termId);
@@ -52,15 +55,19 @@ export async function issueTermInvoice(tx: Tx, actor: { companyId: number; userI
 
   const addendums = await tx.select().from(contractAddendums).where(eq(contractAddendums.contractId, k.id));
   const effective = effectiveContract(k, addendums);
-  const prev = await tx.select({
+  const [prev] = await tx.select({
     dpp: sql<string>`coalesce(sum(${salesInvoices.dppCents}), 0)`,
     adv: sql<string>`coalesce(sum(${salesInvoices.advanceDeductionCents}), 0)`,
+    ret: sql<string>`coalesce(sum(${salesInvoices.retentionCents}), 0)`,
+    ppn: sql<string>`coalesce(sum(${salesInvoices.ppnCents}), 0)`,
   }).from(salesInvoices).where(and(eq(salesInvoices.contractId, k.id), ne(salesInvoices.status, 'cancelled')));
   const totalBp = terms.reduce((s, t) => s + t.percentBp, 0);
-  const isLastTerm = totalBp === BP_100 && term.seq === Math.max(...terms.map((t) => t.seq));
+  const isLastTerm = totalBp === BP_100 && term.seq === terms.reduce((m, t) => Math.max(m, t.seq), 0);
   const amounts = termInvoiceAmounts({
     effectiveDppCents: effective.valueDppEffectiveCents, ppnRateBp: k.ppnRateBp, retentionBp: k.retentionBp, advanceCents: k.advanceCents,
-    termPercentBp: term.percentBp, previousDppCents: Number(prev[0]!.dpp), previousAdvanceDeductionCents: Number(prev[0]!.adv), isLastTerm,
+    termPercentBp: term.percentBp, isLastTerm,
+    previousDppCents: Number(prev!.dpp), previousAdvanceDeductionCents: Number(prev!.adv),
+    previousRetentionCents: Number(prev!.ret), previousPpnCents: Number(prev!.ppn),
   });
   // an addendum that lowered the contract below what is already billed leaves less than nothing for
   // this termin: such an invoice could never be paid, so it is not issued. Exactly nothing (rounding
@@ -87,9 +94,12 @@ export async function issueTermInvoice(tx: Tx, actor: { companyId: number; userI
 export async function cancelSalesInvoice(tx: Tx, invoiceId: number) {
   const [inv] = await tx.select().from(salesInvoices).where(eq(salesInvoices.id, invoiceId)).for('update');
   if (!inv) throw new HTTPException(404, { message: 'Tagihan tidak ditemukan.' });
-  if (inv.status !== 'issued') throw new HTTPException(409, { message: `Tagihan berstatus ${inv.status}; hanya yang belum dibayar bisa dibatalkan.` });
+  // a zero invoice is issued as settled, without any payment: it may be cancelled like an unpaid one,
+  // or a wrong earlier termin under it could never be corrected
+  const unpaid = inv.status === 'issued' || (inv.status === 'paid' && inv.totalCents === 0);
+  if (!unpaid) throw new HTTPException(409, { message: `Tagihan berstatus ${inv.status}; hanya yang belum dibayar bisa dibatalkan.` });
   // the contract row serializes cancel and issue of one contract (issueTermInvoice locks it too)
-  await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, inv.contractId)).for('update');
+  await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, inv.contractId)).for('no key update');
   const later = await tx.select({ seq: contractTerms.seq, number: salesInvoices.number }).from(salesInvoices)
     .innerJoin(contractTerms, eq(contractTerms.id, salesInvoices.termId))
     .where(and(eq(salesInvoices.contractId, inv.contractId), ne(salesInvoices.status, 'cancelled'), ne(salesInvoices.id, inv.id),
@@ -111,14 +121,35 @@ export interface PaymentInput {
   note?: string | undefined;
 }
 
+type PaymentRow = typeof payments.$inferSelect;
+
+/**
+ * A payment as the API shows it: the paid document by the reference clients know — a sales invoice
+ * by its id, a vendor invoice by its row_id (its internal id never leaves the API, LLD §2).
+ */
+export function publicPayment(p: PaymentRow, vendorRowId: (id: number) => string | undefined) {
+  const { payableId, idempotencyKey: _key, ...rest } = p;
+  return { ...rest, rowRef: p.payableType === 'vendor_invoices' ? vendorRowId(payableId) ?? null : payableId };
+}
+
+/** row_id of the vendor invoices behind some payments, for publicPayment. */
+export async function vendorRowIds(tx: Tx, rows: readonly PaymentRow[]): Promise<(id: number) => string | undefined> {
+  const ids = [...new Set(rows.filter((r) => r.payableType === 'vendor_invoices').map((r) => r.payableId))];
+  const found = ids.length ? await tx.select({ id: vendorInvoices.id, rowId: vendorInvoices.rowId }).from(vendorInvoices).where(inArray(vendorInvoices.id, ids)) : [];
+  const map = new Map(found.map((f) => [f.id, f.rowId]));
+  return (id) => map.get(id);
+}
+
 /**
  * Records money in (sales invoice) or out (confirmed vendor invoice). Σ payments may not exceed the
- * document total; a sales invoice becomes partial / paid accordingly. The document row is locked.
+ * document total; a sales invoice becomes partial / paid accordingly. The document row is locked, so
+ * a repeat of the same `idempotencyKey` waits for the first and then returns its payment (replayed).
  */
-export async function recordPayment(tx: Tx, actor: { companyId: number }, input: PaymentInput) {
+export async function recordPayment(tx: Tx, actor: { companyId: number }, input: PaymentInput, idempotencyKey?: string) {
   let payableId: number;
   let siteId: number;
   let totalCents: number;
+  let vendorRowId: string | undefined;
   if (input.payableType === 'sales_invoices') {
     const [inv] = await tx.select().from(salesInvoices).where(eq(salesInvoices.id, Number(input.rowRef))).for('update');
     if (!inv) throw new HTTPException(404, { message: 'Tagihan tidak ditemukan.' });
@@ -129,19 +160,30 @@ export async function recordPayment(tx: Tx, actor: { companyId: number }, input:
     if (!vi) throw new HTTPException(404, { message: 'Nota vendor tidak ditemukan.' });
     if (vi.status !== 'terkonfirmasi') throw new HTTPException(409, { message: 'Hanya nota vendor terkonfirmasi yang bisa dibayar.' });
     ({ id: payableId, siteId, totalCents } = vi);
+    vendorRowId = vi.rowId;
   }
-  const [paid] = await tx.select({ sum: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
-    .where(and(eq(payments.payableType, input.payableType), eq(payments.payableId, payableId)));
-  const after = Number(paid!.sum) + input.amountCents;
-  if (after > totalCents) throw new HTTPException(409, { message: `Pembayaran melebihi sisa tagihan (sisa ${totalCents - Number(paid!.sum)} sen).` });
+  const paidSoFar = async () => Number((await tx.select({ sum: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
+    .where(and(eq(payments.payableType, input.payableType), eq(payments.payableId, payableId))))[0]!.sum);
+  const show = (p: PaymentRow, balanceCents: number, replayed: boolean) => ({ ...publicPayment(p, () => vendorRowId), balanceCents, replayed });
+
+  if (idempotencyKey) {
+    const [done] = await tx.select().from(payments).where(eq(payments.idempotencyKey, idempotencyKey));
+    if (done && (done.payableType !== input.payableType || done.payableId !== payableId)) {
+      throw new HTTPException(409, { message: 'Idempotency-Key sudah dipakai untuk pembayaran lain.' });
+    }
+    if (done) return show(done, totalCents - (await paidSoFar()), true);
+  }
+  const paid = await paidSoFar();
+  const after = paid + input.amountCents;
+  if (after > totalCents) throw new HTTPException(409, { message: `Pembayaran melebihi sisa tagihan (sisa ${totalCents - paid} sen).` });
   const [row] = await tx.insert(payments).values({
     companyId: actor.companyId, siteId, payableType: input.payableType, payableId, paidAt: input.paidAt, amountCents: input.amountCents,
-    method: input.method, reference: input.reference ?? null, note: input.note ?? null,
+    method: input.method, reference: input.reference ?? null, note: input.note ?? null, idempotencyKey: idempotencyKey ?? null,
   }).returning();
   if (input.payableType === 'sales_invoices') {
     await tx.update(salesInvoices).set({ status: after === totalCents ? 'paid' : 'partial' }).where(eq(salesInvoices.id, payableId));
   }
-  return { ...row!, balanceCents: totalCents - after };
+  return show(row!, totalCents - after, false);
 }
 
 /** Open balance per sales invoice, with its aging bucket (age = days since the invoice date). */
@@ -155,9 +197,9 @@ export async function receivables(tx: Tx, today: Date) {
   }).filter((r) => r.balanceCents > 0);
 }
 
-/** Unpaid confirmed vendor invoices; overdue when the due date has passed. */
+/** Unpaid confirmed vendor invoices; overdue when the due date has passed (WIB calendar). */
 export async function payables(tx: Tx, today: Date) {
-  const iso = today.toISOString().slice(0, 10);
+  const iso = wibDate(today);
   const vis = await tx.select().from(vendorInvoices).where(eq(vendorInvoices.status, 'terkonfirmasi'));
   const paid = await paidBy(tx, 'vendor_invoices', vis.map((v) => v.id));
   return vis.map((v) => ({
@@ -175,7 +217,7 @@ async function paidBy(tx: Tx, type: (typeof PAYABLE_TYPES)[number], ids: number[
 
 /** Sales invoices of the company due within `days` days (alert "termin jatuh tempo"). */
 export async function salesInvoicesDueWithin(tx: Tx, today: Date, days: number) {
-  const limit = addDays(today.toISOString().slice(0, 10), days);
+  const limit = addDays(wibDate(today), days);
   return tx.select().from(salesInvoices).where(and(inArray(salesInvoices.status, ['issued', 'partial']), lte(salesInvoices.dueDate, limit)));
 }
 

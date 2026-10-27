@@ -1,5 +1,5 @@
 {
-  "id": "bc003089-dddf-4202-9cf2-63ee9375bf7e",
+  "id": "7f7fd22c-3b84-4eba-9d89-4526b58ae7f2",
   "prevId": "f0e957ba-d870-4d29-9afc-234a085d116e",
   "version": "7",
   "dialect": "postgresql",
@@ -5751,6 +5751,12 @@
         "default_category": {
           "name": "default_category",
           "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payment_terms_days": {
+          "name": "payment_terms_days",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },

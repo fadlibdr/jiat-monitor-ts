@@ -197,9 +197,18 @@ export interface GrInput { receivedAt: string; note?: string | undefined; items:
  * the PO becomes partial or received accordingly. The PO row is locked, so two receipts at once
  * cannot both pass the check.
  */
-export async function receive(tx: Tx, actor: Actor, poId: number, input: GrInput) {
+export async function receive(tx: Tx, actor: Actor, poId: number, input: GrInput, idempotencyKey?: string) {
   const [po] = await tx.select().from(purchaseOrders).where(eq(purchaseOrders.id, poId)).for('update');
   if (!po) throw new HTTPException(404, { message: 'PO tidak ditemukan.' });
+  if (idempotencyKey) {
+    // the PO row is locked: a resubmission waits for the first and then finds its receipt
+    const [done] = await tx.select().from(goodsReceipts).where(eq(goodsReceipts.idempotencyKey, idempotencyKey));
+    if (done && done.poId !== poId) throw new HTTPException(409, { message: 'Idempotency-Key sudah dipakai untuk penerimaan lain.' });
+    if (done) {
+      const items = await tx.select().from(goodsReceiptItems).where(eq(goodsReceiptItems.grId, done.id));
+      return { ...done, items, poStatus: po.status, replayed: true };
+    }
+  }
   if (po.status !== 'issued' && po.status !== 'partial') throw new HTTPException(409, { message: `PO berstatus ${po.status}; penerimaan hanya untuk PO issued/partial.` });
   const lines = await tx.select().from(purchaseOrderItems).where(eq(purchaseOrderItems.poId, poId));
   const already = await receivedByLine(tx, lines.map((l) => l.id));
@@ -220,13 +229,14 @@ export async function receive(tx: Tx, actor: Actor, poId: number, input: GrInput
   const number = await nextDocNumber(tx, actor.companyId, 'GR', code, input.receivedAt);
   const [gr] = await tx.insert(goodsReceipts).values({
     companyId: actor.companyId, siteId: po.siteId, poId, number, receivedAt: input.receivedAt, receivedBy: actor.userId, note: input.note ?? null,
+    idempotencyKey: idempotencyKey ?? null,
   }).returning();
   const items = await tx.insert(goodsReceiptItems).values([...incoming].map(([poItemId, q]) => ({
     companyId: actor.companyId, grId: gr!.id, poItemId, qtyReceived: qtyToString(q),
   }))).returning();
   const status = receiptStatus(lines.map((l) => ({ ordered4: parseQty(l.qty)!, received4: (already.get(l.id) ?? 0) + (incoming.get(l.id) ?? 0) })));
   await tx.update(purchaseOrders).set({ status }).where(eq(purchaseOrders.id, poId));
-  return { ...gr!, items, poStatus: status };
+  return { ...gr!, items, poStatus: status, replayed: false };
 }
 
 // --- commitment vs BOQ ---

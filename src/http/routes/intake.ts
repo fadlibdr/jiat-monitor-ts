@@ -31,6 +31,7 @@ const ReviewPatch = z.object({
   vendorName: z.string().trim().min(2).max(200).optional(),
   invoiceDate: z.string().min(6).max(30).optional(),
   docNumber: z.string().min(1).max(100).optional(),
+  dueDate: z.string().min(6).max(30).optional(),
   status: z.enum(['terkonfirmasi', 'ditolak']).optional(),
 }).refine((b) => Object.keys(b).length > 0, 'body kosong');
 const MatchBody = z.object({ poId: IdParam.nullable(), grId: IdParam.nullable().optional() });
@@ -78,6 +79,11 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
       changes.push({ field: 'invoiceDate', value: iso });
     }
     if (body.docNumber !== undefined) changes.push({ field: 'docNumber', value: body.docNumber });
+    if (body.dueDate !== undefined) {
+      const iso = parseIndonesianDate(body.dueDate);
+      if (!iso) throw new HTTPException(400, { message: 'jatuh tempo tidak terbaca' });
+      changes.push({ field: 'dueDate', value: iso });
+    }
     if (body.status) changes.push({ field: 'status', value: body.status });
 
     const r = await withCompany(db, c.get('tenant'), (tx) => applyChanges(tx, rowId, changes, { channel: 'admin', userId: c.get('userId'), today: now() }));

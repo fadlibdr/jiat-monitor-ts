@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import { daysLeft, effectiveContract } from '../domain/contract.js';
+import { wibDate, wibMonth } from '../domain/date.js';
 import { lineAmountCents, parseQty } from '../domain/quantity.js';
 import { progressAt } from '../domain/scurve.js';
 import {
@@ -52,7 +53,7 @@ const nameKey = (name: string | null) => createHash('sha256').update((name ?? ''
 const ageDays = (iso: string, now: Date) => 0 - (daysLeft(iso, now) ?? 0); // never -0
 
 export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Promise<SnapshotRows> {
-  const currentPeriod = monthOf(now.toISOString().slice(0, 10));
+  const currentPeriod = wibMonth(now);
   const alerts: SnapshotRows['alerts'] = [];
   const alert = (kind: SnapshotRows['alerts'][number]['kind'], ref: string, siteId: number, data: Record<string, string | number | null>) =>
     alerts.push({ companyId, kind, ref, siteId, data });
@@ -137,7 +138,7 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Pro
   }
   // realised cost = confirmed vendor invoices, DPP (the BOQ budget is DPP too)
   for (const v of await tx.select().from(vendorInvoices).where(eq(vendorInvoices.status, 'terkonfirmasi'))) {
-    const m = bucket(v.siteId, monthOf(v.invoiceDate ?? v.createdAt.toISOString().slice(0, 10)));
+    const m = bucket(v.siteId, monthOf(v.invoiceDate ?? wibDate(v.createdAt)));
     const cat = v.category ?? 'tanpa_kategori';
     const dpp = v.dppCents ?? (v.ppnCents !== null ? v.totalCents - v.ppnCents : v.totalCents);
     m.costByCategory[cat] = (m.costByCategory[cat] ?? 0) + dpp;

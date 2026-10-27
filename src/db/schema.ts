@@ -249,6 +249,8 @@ export const vendors = pgTable('vendors', {
   bankAccount: varchar('bank_account', { length: 40 }),
   phone: varchar('phone', { length: 30 }),
   defaultCategory: varchar('default_category', { length: 20 }).$type<(typeof CATEGORIES)[number]>(),
+  /** days from the nota date to its due date; null = DEFAULT_PAYMENT_TERMS_DAYS (intake/review.ts) */
+  paymentTermsDays: integer('payment_terms_days'),
   status: varchar('status', { length: 10 }).notNull().default('active').$type<(typeof VENDOR_STATUSES)[number]>(),
   ...authorship,
   ...timestamps,

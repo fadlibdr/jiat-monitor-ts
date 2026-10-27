@@ -116,6 +116,19 @@ export async function readUpload(c: Context, max: number): Promise<{ bytes: Buff
   return { bytes: Buffer.from(await f.arrayBuffer()), name: f.name || undefined };
 }
 
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * Optional `Idempotency-Key` header of a POST that records money or goods: the client sends one key
+ * per form submission, and a repeat (double click, retry after a timeout) returns what the first did.
+ */
+export function idempotencyKey(c: Context): string | undefined {
+  const k = c.req.header('idempotency-key');
+  if (k === undefined) return undefined;
+  if (!IDEMPOTENCY_KEY.test(k)) throw new HTTPException(400, { message: 'Idempotency-Key: 8–64 karakter A-Z a-z 0-9 _ -' });
+  return k;
+}
+
 export function notFound(message: string): never {
   throw new HTTPException(404, { message });
 }

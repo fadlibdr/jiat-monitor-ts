@@ -179,7 +179,7 @@ describe('issueTermInvoice: order, duplicates, not found', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('issueTermInvoice: amounts (DPP, uang muka, retensi, PPN)', () => {
-  it('3 × 33.33 %: the last termin takes the rest so DPP and uang muka add up to the cent', async () => {
+  it('3 × 33.33 %: the last termin takes the rest so DPP, uang muka, retensi and PPN add up to the cent', async () => {
     const { K, terms } = await contract(w, { valueDppCents: 100, advanceCents: 10, retentionBp: 500, ppnRateBp: 1100 }, [
       { seq: 1, percentBp: 3333, triggerProgressBp: 0 }, { seq: 2, percentBp: 3333, triggerProgressBp: 0 }, { seq: 3, percentBp: 3334, triggerProgressBp: 0 },
     ]);
@@ -189,10 +189,15 @@ describe('issueTermInvoice: amounts (DPP, uang muka, retensi, PPN)', () => {
     // 33.33 → 33; uang muka 3.333 → 3; retensi 1.65 → 2 (half away from zero); PPN 11 % × 30 = 3.3 → 3
     expect(i1).toMatchObject({ dppCents: 33, advanceDeductionCents: 3, retentionCents: 2, ppnCents: 3, totalCents: 31 });
     expect(i2).toMatchObject({ dppCents: 33, advanceDeductionCents: 3, retentionCents: 2, ppnCents: 3, totalCents: 31 });
-    // naive 33.34 % would give 33 and 3; the last takes 34 and 4
-    expect(i3).toMatchObject({ dppCents: 34, advanceDeductionCents: 4, retentionCents: 2, ppnCents: 3, totalCents: 31 });
+    // naive 33.34 % would give 33 and 3; the last takes 34 and 4. Retensi of the contract is 5 % × 100 = 5,
+    // so the last withholds 5 − 2 − 2 = 1 (not 2); PPN of the contract is 11 % × (100 − 10) = 9.9 → 10, so 10 − 3 − 3 = 4
+    expect(i3).toMatchObject({ dppCents: 34, advanceDeductionCents: 4, retentionCents: 1, ppnCents: 4, totalCents: 33 });
     expect(i1.dppCents + i2.dppCents + i3.dppCents).toBe(100);
     expect(i1.advanceDeductionCents + i2.advanceDeductionCents + i3.advanceDeductionCents).toBe(10);
+    expect(i1.retentionCents + i2.retentionCents + i3.retentionCents).toBe(5);
+    expect(i1.ppnCents + i2.ppnCents + i3.ppnCents).toBe(10);
+    // what the employer pays over the schedule: DPP − uang muka − retensi + PPN of the whole contract
+    expect(i1.totalCents + i2.totalCents + i3.totalCents).toBe(100 - 10 - 5 + 10);
   });
 
   it('awkward amounts + an addendum between termin 1 and 2: Σ DPP = effective DPP, Σ uang muka = advance, to the cent', async () => {
@@ -207,20 +212,27 @@ describe('issueTermInvoice: amounts (DPP, uang muka, retensi, PPN)', () => {
     const i3 = await issue(K, terms[3]!);
     const DPP1 = DPP0 + DELTA;
 
-    const expectRow = (inv: typeof i1, dpp: number, adv: number) => {
-      const ret = rhaz(dpp, 500, 10_000);
-      const ppn = rhaz(dpp - adv, 1100, 10_000);
+    const expectRow = (inv: typeof i1, dpp: number, adv: number, rest?: { ret: number; ppn: number }) => {
+      const ret = rest?.ret ?? rhaz(dpp, 500, 10_000);
+      const ppn = rest?.ppn ?? rhaz(dpp - adv, 1100, 10_000);
       expect(inv).toMatchObject({ dppCents: dpp, advanceDeductionCents: adv, retentionCents: ret, ppnCents: ppn, totalCents: dpp - adv - ret + ppn });
     };
     expectRow(i1, rhaz(DPP0, 3333, 10_000), rhaz(ADV, 3333, 10_000)); // billed before the addendum
     expectRow(i2, rhaz(DPP1, 3333, 10_000), rhaz(ADV, 3333, 10_000)); // after: on the new effective DPP
-    expectRow(i3, DPP1 - i1.dppCents - i2.dppCents, ADV - i1.advanceDeductionCents - i2.advanceDeductionCents);
+    // the last takes the rest of every figure, against the effective contract
+    expectRow(i3, DPP1 - i1.dppCents - i2.dppCents, ADV - i1.advanceDeductionCents - i2.advanceDeductionCents, {
+      ret: rhaz(DPP1, 500, 10_000) - i1.retentionCents - i2.retentionCents,
+      ppn: rhaz(DPP1 - ADV, 1100, 10_000) - i1.ppnCents - i2.ppnCents,
+    });
     expect(i3.advanceDeductionCents).not.toBe(rhaz(ADV, 3334, 10_000)); // the rounding cent really moved
     expect(i1.dppCents + i2.dppCents + i3.dppCents).toBe(DPP1);
     expect(i1.advanceDeductionCents + i2.advanceDeductionCents + i3.advanceDeductionCents).toBe(ADV);
-    // concrete values (independently computed), so a change of rounding mode is caught
+    expect(i1.retentionCents + i2.retentionCents + i3.retentionCents).toBe(rhaz(DPP1, 500, 10_000));
+    expect(i1.ppnCents + i2.ppnCents + i3.ppnCents).toBe(rhaz(DPP1 - ADV, 1100, 10_000));
+    // concrete values (independently computed, .probe/termin3.ts), so a change of rounding mode is caught
     expect([i1.dppCents, i2.dppCents, i3.dppCents]).toEqual([32_918_518_521, 32_959_666_669, 33_010_703_706]);
-    expect([i1.totalCents, i2.totalCents, i3.totalCents]).toEqual([29_412_696_298, 29_456_313_335, 29_508_768_151]);
+    expect(i3.retentionCents).toBe(1_650_535_186); // one cent more than 5 % of its own DPP: the rest
+    expect([i1.totalCents, i2.totalCents, i3.totalCents]).toEqual([29_412_696_298, 29_456_313_335, 29_508_768_150]);
   });
 
   it('an addendum before any billing: every termin is on the effective DPP (the original is never used)', async () => {
@@ -256,9 +268,15 @@ describe('issueTermInvoice: amounts (DPP, uang muka, retensi, PPN)', () => {
     const { K, terms } = await contract(w, { valueDppCents: 1, ppnRateBp: 0 }, [
       { seq: 1, percentBp: 5000, triggerProgressBp: 0 }, { seq: 2, percentBp: 5000, triggerProgressBp: 0 },
     ]);
-    expect((await issue(K, terms[1]!)).dppCents).toBe(1);
+    const first = await issue(K, terms[1]!);
+    expect(first.dppCents).toBe(1);
     // nothing left to bill: issued as settled, so it never waits for a payment
-    expect(await issue(K, terms[2]!)).toMatchObject({ dppCents: 0, totalCents: 0, status: 'paid' });
+    const zero = await issue(K, terms[2]!);
+    expect(zero).toMatchObject({ dppCents: 0, totalCents: 0, status: 'paid' });
+    // ...yet it was never paid, so it can be cancelled — else the wrong termin 1 under it could never be
+    await rejects(cancel(first.id), 409, /termin 2/);
+    expect((await cancel(zero.id)).status).toBe('cancelled');
+    expect((await cancel(first.id)).status).toBe('cancelled');
   });
 
   it('very large contract (Rp 50 T): DPP × bp exceeds 2^53 but stays exact', async () => {
@@ -422,7 +440,7 @@ describe('recordPayment: sales invoices', () => {
     const inv = await issue(K, terms[1]!);
     const T = inv.totalCents;
     const p1 = await pay({ rowRef: inv.id, amountCents: 1, method: 'tunai', reference: 'KW-1', note: 'cicilan' });
-    expect(p1).toMatchObject({ balanceCents: T - 1, payableType: 'sales_invoices', payableId: inv.id, siteId: w.s1, companyId: w.A, amountCents: 1, method: 'tunai', reference: 'KW-1', note: 'cicilan' });
+    expect(p1).toMatchObject({ balanceCents: T - 1, payableType: 'sales_invoices', rowRef: inv.id, siteId: w.s1, companyId: w.A, amountCents: 1, method: 'tunai', reference: 'KW-1', note: 'cicilan' });
     expect((await invoice(inv.id)).status).toBe('partial');
 
     const before = await rows(w, payments);
@@ -480,7 +498,9 @@ describe('recordPayment: vendor invoices (by row_id)', () => {
     const vi = await vendorInvoice(w, { status: 'terkonfirmasi', totalCents: 1_000_01, dueDate: '2026-11-30', invoiceDate: '2026-10-02' });
     const v = (amount: number) => pay({ payableType: 'vendor_invoices', rowRef: vi.rowId, amountCents: amount });
     const p1 = await v(400_00);
-    expect(p1).toMatchObject({ payableType: 'vendor_invoices', payableId: vi.id, siteId: w.s1, balanceCents: 600_01 });
+    // the vendor invoice by its public row_id; its internal id never leaves the API
+    expect(p1).toMatchObject({ payableType: 'vendor_invoices', rowRef: vi.rowId, siteId: w.s1, balanceCents: 600_01 });
+    expect(p1).not.toHaveProperty('payableId');
     const open = async () => (await inCompany(w)((tx) => payables(tx, TODAY))).find((r) => r.rowId === vi.rowId);
     expect(await open()).toMatchObject({ balanceCents: 600_01, totalCents: 1_000_01, overdue: false });
     await rejects(v(600_02), 409, /sisa 60001 sen/);
@@ -510,20 +530,23 @@ describe('recordPayment: vendor invoices (by row_id)', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('receivables: aging by days since the invoice date', () => {
-  it('bucket boundaries 30/31, 60/61, 90/91 (and today, future-dated) — date-only, whatever the time of day', async () => {
+  it('bucket boundaries 30/31, 60/61, 90/91 (and today, future-dated) — by the WIB date, whatever the time of day', async () => {
     const ages = [0, 30, 31, 60, 61, 90, 91, -3];
     const ids = new Map<number, number>();
     for (const age of ages) {
       const { K, terms } = await contract(w, {}, [{ seq: 1, percentBp: 10_000, triggerProgressBp: 0 }]);
       ids.set((await issue(K, terms[1]!, isoDaysAgo(age))).id, age);
     }
-    for (const now of [TODAY, new Date('2026-10-27T00:00:00Z'), new Date('2026-10-27T23:59:59Z')]) {
-      const rec = (await inCompany(w)((tx) => receivables(tx, now))).filter((r) => ids.has(r.id));
-      const got = Object.fromEntries(rec.map((r) => [ids.get(r.id)!, [r.ageDays, r.bucket]]));
-      expect(got).toEqual({
+    const agesAt = async (now: Date) => Object.fromEntries((await inCompany(w)((tx) => receivables(tx, now)))
+      .filter((r) => ids.has(r.id)).map((r) => [ids.get(r.id)!, [r.ageDays, r.bucket]]));
+    // the whole WIB day of 27 Oct: 00:00 WIB is 17:00 UTC the day before
+    for (const now of [TODAY, new Date('2026-10-26T17:00:00Z'), new Date('2026-10-27T16:59:59Z')]) {
+      expect(await agesAt(now)).toEqual({
         0: [0, 'd0_30'], 30: [30, 'd0_30'], 31: [31, 'd31_60'], 60: [60, 'd31_60'], 61: [61, 'd61_90'], 90: [90, 'd61_90'], 91: [91, 'd90p'], [-3]: [-3, 'd0_30'],
       });
     }
+    // 00:00 WIB on the 28th (still the 27th in UTC): every invoice is a day older
+    expect((await agesAt(new Date('2026-10-27T17:00:00Z')))[30]).toEqual([31, 'd31_60']);
   });
 
   it('open balance = total − payments; paid and cancelled invoices are not receivables', async () => {

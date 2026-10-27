@@ -11,6 +11,19 @@ const MONTHS: Record<string, number> = {
   desember: 12, des: 12,
 };
 
+/** WIB is UTC+7 all year (no daylight saving): the calendar of every project site and of the schedules. */
+export const WIB_OFFSET_MS = 7 * 3_600_000;
+
+/** The WIB calendar date of an instant, "YYYY-MM-DD" (what "today" means for due dates and aging). */
+export function wibDate(now: Date): string {
+  return new Date(now.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** The WIB month of an instant, "YYYY-MM-01" (dashboard periods). */
+export function wibMonth(now: Date): string {
+  return `${wibDate(now).slice(0, 7)}-01`;
+}
+
 export function parseIndonesianDate(raw: string | null | undefined): string | null {
   if (raw == null) return null;
   const s = raw.trim().replace(/\s+/g, ' ').toLowerCase();

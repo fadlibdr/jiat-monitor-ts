@@ -2,12 +2,13 @@ import { and, asc, desc, eq, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { goodsReceipts, PO_STATUSES, PR_STATUSES, purchaseOrders, purchaseRequests } from '../../db/schema.js';
 import { withCompany } from '../../db/tenant.js';
+import { wibDate } from '../../domain/date.js';
 import {
   approvePo, cancelPo, commitments, createPo, createPr, getPo, getPr, receive, transitionPr,
 } from '../../procurement/service.js';
 import { findContract } from './company.js';
 import {
-  APPROVE_ROLES, ContractParams, EDIT_ROLES, IdParam, jsonBody, requireRole, type App, type RouteDeps,
+  APPROVE_ROLES, ContractParams, EDIT_ROLES, IdParam, idempotencyKey, jsonBody, requireRole, type App, type RouteDeps,
 } from '../context.js';
 
 const Qty = z.union([z.string().min(1).max(30), z.number().positive()]);
@@ -47,7 +48,7 @@ const GrQuery = z.object({ poId: IdParam.optional() });
 
 /** PR → PO → GR (HLD §4). Office roles write; managers approve (HLD §2). */
 export function registerProcurementRoutes(app: App, { db, now }: RouteDeps): void {
-  const today = () => now().toISOString().slice(0, 10);
+  const today = () => wibDate(now());
   const actor = (c: { get: (k: 'companyId' | 'userId') => number }) => ({ companyId: c.get('companyId'), userId: c.get('userId') });
 
   // --- purchase requests ---
@@ -113,8 +114,9 @@ export function registerProcurementRoutes(app: App, { db, now }: RouteDeps): voi
   app.post('/companies/:companyId/purchase-orders/:id/receipts', requireRole(EDIT_ROLES), async (c) => {
     const { id } = DocParams.parse(c.req.param());
     const body = await jsonBody(c, GrBody);
-    const gr = await withCompany(db, c.get('tenant'), (tx) => receive(tx, actor(c), id, body));
-    return c.json({ data: gr }, 201);
+    const key = idempotencyKey(c);
+    const { replayed, idempotencyKey: _key, ...gr } = await withCompany(db, c.get('tenant'), (tx) => receive(tx, actor(c), id, body, key));
+    return c.json({ data: gr }, replayed ? 200 : 201);
   });
   app.get('/companies/:companyId/goods-receipts', async (c) => {
     const q = GrQuery.parse(c.req.query());

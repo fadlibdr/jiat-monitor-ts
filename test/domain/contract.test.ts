@@ -39,12 +39,18 @@ describe('ppnOf / roundDiv', () => {
 });
 
 describe('daysLeft', () => {
-  it('counts calendar days in UTC; negative when past; null without an end date', () => {
-    const today = new Date('2026-10-27T23:59:00Z');
+  it('counts calendar days from today\'s WIB date; negative when past; null without an end date', () => {
+    const today = new Date('2026-10-27T16:59:00Z'); // 23:59 WIB on the 27th
     expect(daysLeft('2026-10-27', today)).toBe(0);
     expect(daysLeft('2026-11-30', today)).toBe(34);
     expect(daysLeft('2026-10-20', today)).toBe(-7);
     expect(daysLeft(null, today)).toBeNull();
+  });
+
+  it('after midnight WIB it is already the next day on site, though not yet in UTC', () => {
+    const justAfter = new Date('2026-10-27T17:00:00Z'); // 00:00 WIB on the 28th
+    expect(daysLeft('2026-10-27', justAfter)).toBe(-1);
+    expect(daysLeft('2026-10-28', justAfter)).toBe(0);
   });
 });
 
