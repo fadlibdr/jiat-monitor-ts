@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { betterAuthAuthenticator, createAuth } from './auth/better-auth.js';
 import { createDb, DatabaseUnavailable } from './db/client.js';
 import { createApp } from './http/app.js';
+import { LocalDiskStorage } from './intake/storage.js';
 
 const Env = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL harus diisi (lihat .env.example).'),
@@ -15,6 +16,10 @@ const Env = z.object({
   AUTH_RATE_LIMIT: z.enum(['0', '1']).optional(),
   /** comma-separated CIDRs of the reverse proxy, e.g. 127.0.0.1/32 */
   AUTH_TRUSTED_PROXIES: z.string().default(''),
+  /** compared with X-Telegram-Bot-Api-Secret-Token; unset = webhook off (404) */
+  TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/, 'TELEGRAM_WEBHOOK_SECRET: 32–256 karakter A-Z a-z 0-9 _ -').optional(),
+  /** folder of original intake photos (same as the worker's) */
+  STORAGE_DIR: z.string().min(1).optional(),
   NODE_ENV: z.string().default('development'),
 });
 
@@ -33,7 +38,11 @@ async function main(): Promise<void> {
     ...(env.AUTH_RATE_LIMIT ? { rateLimit: env.AUTH_RATE_LIMIT === '1' } : {}),
     trustedProxies: env.AUTH_TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean),
   });
-  const app = createApp({ db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins });
+  const app = createApp({
+    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins,
+    ...(env.STORAGE_DIR ? { storage: new LocalDiskStorage(env.STORAGE_DIR) } : {}),
+    ...(env.TELEGRAM_WEBHOOK_SECRET ? { telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET } : {}),
+  });
   const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => console.log(`JIAT Monitor API on :${info.port}`));
 
   const shutdown = (sig: string) => {

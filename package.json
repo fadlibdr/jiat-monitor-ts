@@ -15,7 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "worker": "tsx src/worker.ts",
+    "start:worker": "node dist/worker.js"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.7.13",
