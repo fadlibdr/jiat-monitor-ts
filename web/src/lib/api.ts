@@ -1,6 +1,7 @@
 import type {
-  HoldingDashboard, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, MyCompany, Panels, Site, TelegramLink, Vendor,
+  HoldingDashboard, HoldingRefresh, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, MyCompany, Panels, Site, TelegramLink, Vendor,
 } from './types';
+import { errorMessage } from './errors';
 
 /** An API answer other than 2xx, with the server's Indonesian message when it sent one. */
 export class ApiError extends Error {
@@ -22,12 +23,6 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
-const FALLBACK: Record<number, string> = {
-  401: 'Sesi berakhir. Silakan masuk lagi.',
-  403: 'Anda tidak berwenang untuk tindakan ini.',
-  404: 'Data tidak ditemukan.',
-  429: 'Terlalu sering. Coba lagi sebentar.',
-};
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   // same origin: the session cookie is httpOnly and goes along by itself; nothing is kept in JS
@@ -48,9 +43,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
   }
   if (!res.ok) {
-    const err = (json ?? {}) as { message?: unknown; error?: unknown };
-    const message = typeof err.message === 'string' && err.message ? err.message : FALLBACK[res.status] ?? `Permintaan gagal (${res.status}).`;
-    throw new ApiError(res.status, message, typeof err.error === 'string' ? err.error : null, json);
+    const code = (json as { error?: unknown } | null)?.error;
+    throw new ApiError(res.status, errorMessage(res.status, res.headers.get('content-type'), text, json), typeof code === 'string' ? code : null, json);
   }
   return json as T;
 }
@@ -92,6 +86,6 @@ export const api = {
     request<{ data: Panels }>('GET', `/companies/${companyId}/dashboard${qs({ period })}`).then((r) => r.data),
 
   holdingDashboard: (q: HoldingQuery) => request<HoldingDashboard>('GET', `/holding/dashboard${qs(holdingParams(q))}`),
-  holdingRefresh: () => request<{ data: { refreshedAt: string } }>('POST', '/holding/refresh').then((r) => r.data),
+  holdingRefresh: () => request<{ data: HoldingRefresh }>('POST', '/holding/refresh').then((r) => r.data),
   holdingExportUrl: (q: HoldingQuery) => `/holding/export${qs({ ...holdingParams(q), format: 'xlsx' })}`,
 };

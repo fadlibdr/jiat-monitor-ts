@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { wibStamp } from '../domain/date.js';
 import type { Panels } from './panels.js';
 
 /**
@@ -34,7 +35,7 @@ export async function panelsToXlsx(p: Panels, labels: Labels, meta: { refreshedA
 
   sheet(wb, 'Ringkasan', [{ header: 'Ukuran', key: 'k', width: 40 }, { header: 'Nilai', key: 'v', width: 22 }], [
     { k: 'Periode', v: p.period.slice(0, 7) },
-    { k: 'Data per', v: meta.refreshedAt?.toISOString() ?? '—' },
+    { k: 'Data per', v: meta.refreshedAt ? wibStamp(meta.refreshedAt) : '—' },
     { k: 'Kontrak', v: s.contracts },
     { k: 'Lokasi', v: s.sites },
     { k: 'Perusahaan', v: s.companies },

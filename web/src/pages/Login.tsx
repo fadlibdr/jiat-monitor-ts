@@ -2,11 +2,11 @@ import { useState, type FormEvent } from 'react';
 import { api, ApiError } from '../lib/api';
 
 /** Email + password against Better Auth (/api/auth/sign-in/email); the session is an httpOnly cookie. */
-export function Login({ onSignedIn }: { onSignedIn: () => void }) {
+export function Login({ notice, onSignedIn }: { notice?: string | undefined; onSignedIn: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<string | undefined>(notice);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();

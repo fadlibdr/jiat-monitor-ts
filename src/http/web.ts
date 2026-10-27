@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { Context } from 'hono';
@@ -18,7 +19,26 @@ export function registerWeb(app: App, distDir: string): boolean {
   const root = resolve(distDir);
   const indexPath = join(root, 'index.html');
   if (!existsSync(indexPath)) return false;
-  const indexHtml = readFileSync(indexPath, 'utf8');
+  // A rebuild in place replaces the bundles (vite empties dist/): serve the new shell as soon as it is
+  // written, not the one read at startup that points at deleted bundles. While index.html is missing
+  // mid-build, the last good shell is served.
+  let shellHtml = readFileSync(indexPath, 'utf8');
+  let shellMtimeMs = statSync(indexPath).mtimeMs;
+  const currentShell = async (): Promise<string> => {
+    try {
+      const s = await stat(indexPath);
+      if (s.mtimeMs !== shellMtimeMs) {
+        const html = await readFile(indexPath, 'utf8');
+        if (html.trim()) {
+          shellHtml = html;
+          shellMtimeMs = s.mtimeMs;
+        }
+      }
+    } catch {
+      // ENOENT during a rebuild: keep the last good shell (a new one is picked up on the next request)
+    }
+    return shellHtml;
+  };
 
   const headers = secureHeaders({
     contentSecurityPolicy: {
@@ -48,7 +68,7 @@ export function registerWeb(app: App, distDir: string): boolean {
   app.get(`${WEB_BASE}/assets/*`, serveStatic({ root, rewriteRequestPath: (p) => p.slice(WEB_BASE.length) }));
   // a missing bundle is a 404, not the app shell (a stale tab after a deploy must not run HTML as JS)
   app.get(`${WEB_BASE}/assets/*`, (c) => c.text('Not found', 404));
-  const shell = (c: Context) => c.html(indexHtml, 200, { 'Cache-Control': 'no-cache' });
+  const shell = async (c: Context) => c.html(await currentShell(), 200, { 'Cache-Control': 'no-cache' });
   app.get(WEB_BASE, shell);
   app.get(`${WEB_BASE}/*`, shell);
   return true;

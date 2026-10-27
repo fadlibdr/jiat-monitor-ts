@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from '../lib/router';
+import { SignOutButton } from './ui';
 import type { Me } from '../lib/types';
 
 export interface NavItem {
@@ -19,7 +20,7 @@ export function Shell({ me, context, nav, current, crumbs, roleNote, actions, on
   crumbs: ReactNode;
   roleNote: string;
   actions?: ReactNode;
-  onSignOut: () => void;
+  onSignOut: () => Promise<void>;
   children: ReactNode;
 }) {
   return (
@@ -39,7 +40,7 @@ export function Shell({ me, context, nav, current, crumbs, roleNote, actions, on
         <div className="whoami">
           <strong>{me.name || me.email}</strong>
           <span>{roleNote}</span>
-          <button type="button" onClick={onSignOut}>Keluar</button>
+          <SignOutButton onSignOut={onSignOut} />
         </div>
       </aside>
       <div className="main">

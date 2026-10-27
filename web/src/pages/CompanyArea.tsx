@@ -17,7 +17,7 @@ const DASHBOARD_ROLES: readonly CompanyRole[] = ['finance', 'company_manager', '
 export type CompanyView = 'home' | 'intake' | 'dashboard';
 
 /** Everything under /c/:companyId: the screens this role may open, in the shell. */
-export function CompanyArea({ me, company, view, onSignOut }: { me: Me; company: MyCompany; view: CompanyView; onSignOut: () => void }) {
+export function CompanyArea({ me, company, view, onSignOut }: { me: Me; company: MyCompany; view: CompanyView; onSignOut: () => Promise<void> }) {
   const base = `/c/${company.id}`;
   const nav: Array<NavItem | { head: string }> = [{ head: company.code }];
   if (DASHBOARD_ROLES.includes(company.role)) nav.push({ to: `${base}/dashboard`, label: 'Dashboard perusahaan' });
@@ -75,7 +75,8 @@ function CompanyDashboard({ company }: { company: MyCompany }) {
       </div>
       <div className="filters">
         <label className="chip"><span>Periode</span>
-          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} required />
+          {/* the browser's clear button empties it: keep the shown month rather than fall back silently */}
+          <input type="month" value={month} onChange={(e) => { if (e.target.value) setMonth(e.target.value); }} required />
         </label>
       </div>
       {dash.error && <ErrorNotice error={dash.error} onRetry={dash.reload} />}

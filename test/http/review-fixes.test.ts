@@ -94,6 +94,19 @@ describe('due date of a confirmed nota', () => {
     expect(dash.alerts.filter((a) => a.kind === 'vendor_overdue').map((a) => a.siteId)).toEqual([s1]);
     now = new Date('2026-10-27T03:00:00Z');
   });
+
+  // after the overdue test: these two also fall due on 2026-10-15
+  it('a cleared due date (null) means the nota date + the vendor term again, before and after confirmation', async () => {
+    const e = await nota({ vendorId: termVendor, vendorName: 'CV Tempo Dua Minggu', totalCents: 5_550_000 * RP });
+    expect((await ok<Row>(call(adm, 'PATCH', `/intake/${e}`, { dueDate: '2026-12-01' }))).dueDate).toBe('2026-12-01');
+    expect((await ok<Row>(call(adm, 'PATCH', `/intake/${e}`, { dueDate: null }))).dueDate).toBeNull(); // open: nothing to derive yet
+    expect(await ok<Row>(call(adm, 'PATCH', `/intake/${e}`, { status: 'terkonfirmasi' }))).toMatchObject({ status: 'terkonfirmasi', dueDate: '2026-10-15' });
+
+    const f = await nota({ vendorId: termVendor, vendorName: 'CV Tempo Dua Minggu', totalCents: 6_660_000 * RP });
+    expect((await ok<Row>(call(adm, 'PATCH', `/intake/${f}`, { dueDate: '2026-12-01', status: 'terkonfirmasi' }))).dueDate).toBe('2026-12-01');
+    // the review screen may still correct a confirmed nota's data: clearing re-derives, the status stays
+    expect(await ok<Row>(call(adm, 'PATCH', `/intake/${f}`, { dueDate: null }))).toMatchObject({ status: 'terkonfirmasi', dueDate: '2026-10-15' });
+  });
 });
 
 describe('a paid nota cannot be corrected below what was paid', () => {

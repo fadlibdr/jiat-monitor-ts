@@ -19,6 +19,12 @@ export function wibDate(now: Date): string {
   return new Date(now.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** An instant as WIB wall-clock text, "2026-10-27 06:30 WIB" (what people read: the screens show WIB too). */
+export function wibStamp(at: Date): string {
+  const iso = new Date(at.getTime() + WIB_OFFSET_MS).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} WIB`;
+}
+
 /** The WIB month of an instant, "YYYY-MM-01" (dashboard periods). */
 export function wibMonth(now: Date): string {
   return `${wibDate(now).slice(0, 7)}-01`;

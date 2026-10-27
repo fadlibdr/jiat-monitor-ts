@@ -232,6 +232,9 @@ describe('dashboards', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
       'Ringkasan', 'Per perusahaan', 'Kontrak', 'Kurva S', 'Pembelian', 'Vendor terbesar', 'Invoicing & kas', 'Arus bulanan', 'Intake lapangan', 'Peringatan',
     ]);
+    // "Data per" in WIB, as on the screen (an ISO UTC stamp can even be the previous calendar day)
+    const stamp = String(wb.getWorksheet('Ringkasan')!.getRow(3).getCell(2).value);
+    expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} WIB$/);
     expect((await app.request('/holding/export?format=pdf', send(boss, 'GET'))).status).toBe(400);
   });
 

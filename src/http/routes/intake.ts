@@ -31,7 +31,8 @@ const ReviewPatch = z.object({
   vendorName: z.string().trim().min(2).max(200).optional(),
   invoiceDate: z.string().min(6).max(30).optional(),
   docNumber: z.string().min(1).max(100).optional(),
-  dueDate: z.string().min(6).max(30).optional(),
+  /** null clears it: a confirmed nota then gets its nota date + the vendor's payment term */
+  dueDate: z.string().min(6).max(30).nullable().optional(),
   status: z.enum(['terkonfirmasi', 'ditolak']).optional(),
 }).refine((b) => Object.keys(b).length > 0, 'body kosong');
 const MatchBody = z.object({ poId: IdParam.nullable(), grId: IdParam.nullable().optional() });
@@ -79,7 +80,8 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
       changes.push({ field: 'invoiceDate', value: iso });
     }
     if (body.docNumber !== undefined) changes.push({ field: 'docNumber', value: body.docNumber });
-    if (body.dueDate !== undefined) {
+    if (body.dueDate === null) changes.push({ field: 'dueDate', value: null });
+    else if (body.dueDate !== undefined) {
       const iso = parseIndonesianDate(body.dueDate);
       if (!iso) throw new HTTPException(400, { message: 'jatuh tempo tidak terbaca' });
       changes.push({ field: 'dueDate', value: iso });

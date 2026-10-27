@@ -185,6 +185,9 @@ tr.selected td { background: var(--blue-bg); }
 .notice { border: 1px solid var(--line); border-left: 3px solid var(--navy); background: var(--card); padding: 10px 14px; border-radius: var(--radius); margin-bottom: 14px; }
 .notice.error { border-left-color: var(--red-ink); background: var(--red-bg); color: var(--red-ink); }
 .notice.ok { border-left-color: var(--green-ink); background: var(--green-bg); color: var(--green-ink); }
+.notice.warn { border-left-color: var(--amber); background: var(--amber-bg); color: var(--amber-ink); }
+.signout-error { display: block; margin-top: 6px; color: var(--red-ink); }
+.whoami .signout-error { color: #ffd2a6; }
 .loading { color: var(--muted); padding: 24px 0; }
 .empty { color: var(--muted); padding: 18px 0; text-align: center; }
 

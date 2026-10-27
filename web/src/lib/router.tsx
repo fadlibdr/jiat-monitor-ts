@@ -39,20 +39,7 @@ export function usePath(): string {
   return path;
 }
 
-/** '/c/:companyId/intake' against '/c/3/intake' → { companyId: '3' }; no match → null. */
-export function match(pattern: string, path: string): Record<string, string> | null {
-  const ps = pattern.split('/').filter(Boolean);
-  const xs = path.split('/').filter(Boolean);
-  if (ps.length !== xs.length) return null;
-  const out: Record<string, string> = {};
-  for (let i = 0; i < ps.length; i++) {
-    const p = ps[i]!;
-    const x = xs[i]!;
-    if (p.startsWith(':')) out[p.slice(1)] = decodeURIComponent(x);
-    else if (p !== x) return null;
-  }
-  return out;
-}
+export { match } from './match';
 
 type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & { to: string; children: ReactNode };
 

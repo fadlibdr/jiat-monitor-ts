@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ApiError } from '../lib/api';
 
 export type Tone = 'red' | 'amber' | 'green' | 'blue' | 'plain';
@@ -52,6 +52,31 @@ export function Bar({ fraction, label }: { fraction: number; label: string }) {
 
 export function Loading({ what = 'data' }: { what?: string }) {
   return <div className="loading" role="status">Memuat {what}…</div>;
+}
+
+/**
+ * "Keluar". If the server did not end the session (offline, server error), the user stays signed in
+ * and is told so: on a shared site-office PC a sign-in screen over a live session is worse than an error.
+ */
+export function SignOutButton({ onSignOut, className }: { onSignOut: () => Promise<void>; className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const click = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      await onSignOut(); // on success the signed-in screens, this button included, unmount
+    } catch {
+      setFailed(true);
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" className={className} onClick={() => void click()} disabled={busy}>{busy ? 'Keluar…' : 'Keluar'}</button>
+      {failed && <span className="signout-error" role="alert">Gagal keluar; sesi masih aktif. Periksa koneksi lalu coba lagi.</span>}
+    </>
+  );
 }
 
 export function ErrorNotice({ error, onRetry }: { error: Error; onRetry?: () => void }) {

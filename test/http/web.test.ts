@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -74,6 +74,18 @@ describe('the UI under /app/', () => {
     expect(root.headers.get('location')).toBe('/app/');
     expect((await app.request('/companies')).status).toBe(401);
     expect((await app.request('/health')).status).toBe(200);
+  });
+
+  it('a rebuild in place is served without a restart; while index.html is missing the last shell stays', async () => {
+    const next = SHELL.replace('index-abc123.js', 'index-def456.js');
+    await rm(join(dist, 'index.html'));
+    expect(await (await app.request('/app/')).text()).toBe(SHELL); // mid-build
+    await writeFile(join(dist, 'index.html'), next);
+    await utimes(join(dist, 'index.html'), new Date(), new Date(Date.now() + 5_000)); // a distinct mtime on coarse clocks
+    expect(await (await app.request('/app/holding')).text()).toBe(next);
+    await writeFile(join(dist, 'index.html'), SHELL);
+    await utimes(join(dist, 'index.html'), new Date(), new Date(Date.now() + 10_000));
+    expect(await (await app.request('/app/')).text()).toBe(SHELL);
   });
 
   it('without a build the API runs alone', async () => {

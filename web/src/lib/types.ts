@@ -80,7 +80,8 @@ export interface IntakePatch {
   vendorId?: number;
   vendorName?: string;
   invoiceDate?: string;
-  dueDate?: string;
+  /** null clears it: a confirmed nota then gets its nota date + the vendor's payment term */
+  dueDate?: string | null;
   docNumber?: string;
   status?: 'terkonfirmasi' | 'ditolak';
 }
@@ -191,6 +192,13 @@ export interface HoldingMeta {
 export interface HoldingDashboard {
   data: Panels;
   meta: HoldingMeta;
+}
+
+/** POST /holding/refresh */
+export interface HoldingRefresh {
+  refreshedAt: string;
+  /** companies whose refresh failed: their previous snapshot is still the one shown */
+  staleCompanyIds: number[];
 }
 
 export interface TelegramLink {

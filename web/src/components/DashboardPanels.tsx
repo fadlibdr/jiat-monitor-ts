@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  groupThousands, minutesLabel, miliar, monthLabel, percentBp, percentMicro, points, rupiah, rupiahShort,
+  groupThousands, minutesLabel, monthLabel, percentBp, percentMicro, points, rupiah, rupiahShort,
 } from '../lib/format';
 import { ALERT_TONE, contractStatus, daysTone, progressNote } from '../lib/status';
 import type { Panels } from '../lib/types';
@@ -137,7 +137,7 @@ export function DashboardPanels({ p, names, multiCompany }: { p: Omit<Panels, 'f
                 <Mini
                   label={`Kas ${monthLabel(p.finance.cash.period)}`}
                   value={rupiahShort(p.finance.cash.netCents, { signed: true })}
-                  sub={`masuk ${miliar(p.finance.cash.inCents)} · keluar ${miliar(p.finance.cash.outCents)} (M)`}
+                  sub={`masuk ${rupiahShort(p.finance.cash.inCents)} · keluar ${rupiahShort(p.finance.cash.outCents)}`}
                 />
               </div>
               <div className="eyebrow" style={{ marginTop: 18 }}>Umur piutang</div>
@@ -213,7 +213,7 @@ export function DashboardPanels({ p, names, multiCompany }: { p: Omit<Panels, 'f
               label="Ask rate"
               value={percentBp(p.intake.askRateBp)}
               sub="target < 10%"
-              subTone={p.intake.askRateBp !== null && p.intake.askRateBp >= ASK_RATE_TARGET_BP ? 'amber' : 'green'}
+              subTone={p.intake.askRateBp === null ? 'plain' : p.intake.askRateBp >= ASK_RATE_TARGET_BP ? 'amber' : 'green'}
             />
             <Mini label="Waktu sampai terkonfirmasi" value={minutesLabel(p.intake.medianConfirmMinutes7d)} sub="median, 7 hari" />
           </div>

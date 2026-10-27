@@ -93,6 +93,7 @@ npm run typecheck
 npm run build
 (cd web && npm ci && npm run build)   # UI → web/dist, disajikan di /app/ (WEB_DIST_DIR); tanpa build, API tetap jalan
 (cd web && npm run dev)               # pengembangan UI: Vite di 127.0.0.1:5173, /api /me /companies /holding /admin diteruskan ke :3000
+                                      # API dev perlu TRUSTED_ORIGINS=http://127.0.0.1:5173 (Better Auth menolak origin lain saat masuk)
 
 # Postgres sungguhan
 cp .env.example .env            # isi DATABASE_URL (role jiat_app, BUKAN owner) dan DATABASE_URL_MIGRATE (owner)
@@ -186,7 +187,7 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | POST | `/telegram/webhook` | header `X-Telegram-Bot-Api-Secret-Token` (dibandingkan waktu-konstan): salah → `403`, secret tidak dikonfigurasi → `404`; chat tak dikenal/nonaktif dan teks yang bukan koreksi → `200` tanpa disimpan; idempoten per `(chat_id, message_id)`; event + job ditulis dalam satu transaksi, lalu `200` |
 | GET/POST · PATCH | `/companies/:companyId/vendors` · `…/vendors/:vendorId` | rekening & NPWP hanya dilihat **dan diubah** `finance` / manajer (`403` untuk peran lain) |
 | GET | `/companies/:companyId/intake/review?status=&siteId=&limit=` | default `perlu_konfirmasi` + `perlu_cek`; NPWP nota hanya untuk `finance` / manajer |
-| PATCH | `/companies/:companyId/intake/:rowId` | `{vendorId\|vendorName, category, totalCents ("Rp 2.450.000,-" juga), invoiceDate, dueDate, docNumber, status}`; konfirmasi tanpa `dueDate` → tanggal nota + tempo vendor (`paymentTermsDays`, default 30); `400` total di bawah yang sudah dibayar / jatuh tempo sebelum tanggal nota; `409` ditutup / belum bisa dikonfirmasi / kembar terkonfirmasi |
+| PATCH | `/companies/:companyId/intake/:rowId` | `{vendorId\|vendorName, category, totalCents ("Rp 2.450.000,-" juga), invoiceDate, dueDate, docNumber, status}`; konfirmasi tanpa `dueDate` (atau `dueDate: null`, juga pada nota yang sudah dikonfirmasi) → tanggal nota + tempo vendor (`paymentTermsDays`, default 30); nota terkonfirmasi masih bisa dikoreksi datanya, tidak statusnya; `400` total di bawah yang sudah dibayar / jatuh tempo sebelum tanggal nota; `409` ditutup / belum bisa dikonfirmasi / kembar terkonfirmasi |
 | GET | `/companies/:companyId/intake/:rowId/photo` | foto asli, `private`, tidak pernah URL publik |
 | GET · PUT | `/companies/:companyId/intake/:rowId/match-candidates` · `…/match` | PO di site yang sama (vendor sama bila diketahui), total terdekat dulu; `{poId\|null, grId?}`; `409` site/vendor/status berbeda atau GR bukan milik PO |
 | GET/POST | `/companies/:companyId/purchase-requests[/:id]` · POST `…/:id/submit\|approve\|reject` | tulis: `project_admin`/manajer; setuju/tolak: manajer |

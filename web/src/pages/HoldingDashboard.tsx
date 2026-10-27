@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DashboardPanels, type Names } from '../components/DashboardPanels';
 import { Shell } from '../components/Shell';
 import { ErrorNotice, Loading } from '../components/ui';
@@ -29,27 +29,34 @@ export function namesFrom(meta: HoldingMeta): Names {
 }
 
 /** LLD §8 holding dashboard: every company, read-only, from the stored snapshot. */
-export function HoldingDashboard({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
+export function HoldingDashboard({ me, onSignOut }: { me: Me; onSignOut: () => Promise<void> }) {
   const [companyId, setCompanyId] = useState<number>();
   const [siteId, setSiteId] = useState<number>();
   const [month, setMonth] = useState(currentMonthWib());
   const [employerDraft, setEmployerDraft] = useState('');
   const [employer, setEmployer] = useState('');
   const [status, setStatus] = useState('active');
-  const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'info'; text: string }>();
+  const [notice, setNotice] = useState<{ tone: 'ok' | 'warn' | 'error' | 'info'; text: string }>();
   const [refreshing, setRefreshing] = useState(false);
 
   const query: HoldingQuery = { companyId, siteId, period: month || undefined, employer: employer || undefined, status: status || undefined };
   const { data, error, loading, reload } = useAsync(() => api.holdingDashboard(query), [companyId, siteId, month, employer, status]);
-  const names = useMemo(() => (data ? namesFrom(data.meta) : undefined), [data]);
-  const sites = data?.meta.sites.filter((s) => companyId === undefined || s.companyId === companyId) ?? [];
+  // the panels clear while a new filter loads; the company/site lists and names keep the last answer
+  const [meta, setMeta] = useState<HoldingMeta>();
+  useEffect(() => { if (data) setMeta(data.meta); }, [data]);
+  const names = useMemo(() => (meta ? namesFrom(meta) : undefined), [meta]);
+  const sites = meta?.sites.filter((s) => companyId === undefined || s.companyId === companyId) ?? [];
 
   const refresh = async () => {
     setRefreshing(true);
     setNotice(undefined);
     try {
       const r = await api.holdingRefresh();
-      setNotice({ tone: 'ok', text: `Data disegarkan ${instantLabel(r.refreshedAt)} WIB.` });
+      // a company whose refresh failed keeps its previous snapshot: say which, or "data per" contradicts this notice
+      const stale = r.staleCompanyIds.map((id) => names?.company(id) ?? `#${id}`);
+      setNotice(stale.length
+        ? { tone: 'warn', text: `Data disegarkan ${instantLabel(r.refreshedAt)} WIB, kecuali ${stale.join(', ')}: masih memakai data sebelumnya.` }
+        : { tone: 'ok', text: `Data disegarkan ${instantLabel(r.refreshedAt)} WIB.` });
       reload();
     } catch (e) {
       setNotice({ tone: e instanceof ApiError && e.status === 429 ? 'info' : 'error', text: e instanceof ApiError ? e.message : 'Tidak dapat menghubungi server.' });
@@ -83,8 +90,8 @@ export function HoldingDashboard({ me, onSignOut }: { me: Me; onSignOut: () => v
       <div className="filters" role="group" aria-label="Filter">
         <label className="chip"><span>Perusahaan</span>
           <select value={companyId ?? ''} onChange={(e) => { setCompanyId(e.target.value ? Number(e.target.value) : undefined); setSiteId(undefined); }}>
-            <option value="">Semua ({data?.meta.companies.length ?? '…'})</option>
-            {data?.meta.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="">Semua ({meta?.companies.length ?? '…'})</option>
+            {meta?.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </label>
         <label className="chip"><span>Lokasi</span>
@@ -94,7 +101,8 @@ export function HoldingDashboard({ me, onSignOut }: { me: Me; onSignOut: () => v
           </select>
         </label>
         <label className="chip"><span>Periode</span>
-          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} required />
+          {/* the browser's clear button empties it: keep the shown month rather than fall back silently */}
+          <input type="month" value={month} onChange={(e) => { if (e.target.value) setMonth(e.target.value); }} required />
         </label>
         <label className="chip"><span>Pemberi kerja</span>
           <input

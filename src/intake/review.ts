@@ -18,7 +18,8 @@ export type Change =
   | { field: 'vendorId'; value: number }
   | { field: 'invoiceDate'; value: string }
   | { field: 'docNumber'; value: string }
-  | { field: 'dueDate'; value: string }
+  /** null = cleared: a confirmed nota then falls back to its nota date + the vendor's payment term */
+  | { field: 'dueDate'; value: string | null }
   | { field: 'status'; value: 'terkonfirmasi' | 'ditolak' };
 
 /** Payment term when the vendor has none (vendors.payment_terms_days): 30 days, the usual "net 30". */
@@ -182,11 +183,14 @@ async function applyInSavepoint(
     next.status = 'terkonfirmasi';
     next.confirmedAt = new Date();
     next.confirmedBy = ctx.userId;
-    // payables are overdue from the due date (LLD §8 "Vendor overdue"): a confirmed nota always has one
-    if (!next.dueDate) {
-      const [v] = await tx.select({ days: vendors.paymentTermsDays }).from(vendors).where(eq(vendors.id, next.vendorId!));
-      next.dueDate = addDays(next.invoiceDate!, v?.days ?? DEFAULT_PAYMENT_TERMS_DAYS);
-    }
+  }
+  // payables are overdue from the due date (LLD §8 "Vendor overdue"): a confirmed nota always has one.
+  // None given, or cleared on the review screen (also after confirmation) = nota date + vendor term.
+  if (next.status === 'terkonfirmasi' && !next.dueDate && next.invoiceDate) {
+    const [v] = next.vendorId
+      ? await tx.select({ days: vendors.paymentTermsDays }).from(vendors).where(eq(vendors.id, next.vendorId))
+      : [];
+    next.dueDate = addDays(next.invoiceDate, v?.days ?? DEFAULT_PAYMENT_TERMS_DAYS);
   }
   if (next.status === 'terkonfirmasi') Object.assign(next, trustedSplit(next));
 

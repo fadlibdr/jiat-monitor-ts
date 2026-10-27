@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ErrorNotice } from '../components/ui';
+import { ErrorNotice, SignOutButton } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 import { instantLabel } from '../lib/format';
 import { Link } from '../lib/router';
@@ -7,7 +7,7 @@ import { ROLE_LABEL } from '../lib/status';
 import type { Me, MyCompany, TelegramLink } from '../lib/types';
 
 /** Company picker after sign-in, plus the holding entry and Telegram linking. */
-export function Home({ me, companies, onSignOut }: { me: Me; companies: MyCompany[]; onSignOut: () => void }) {
+export function Home({ me, companies, onSignOut }: { me: Me; companies: MyCompany[]; onSignOut: () => Promise<void> }) {
   return (
     <div className="center">
       <div style={{ width: '100%', maxWidth: 560 }}>
@@ -29,7 +29,7 @@ export function Home({ me, companies, onSignOut }: { me: Me; companies: MyCompan
           )}
         </div>
         <TelegramLinkBox />
-        <p style={{ marginTop: 20 }}><button type="button" className="linkish" onClick={onSignOut}>Keluar</button></p>
+        <p style={{ marginTop: 20 }}><SignOutButton className="linkish" onSignOut={onSignOut} /></p>
       </div>
     </div>
   );
