@@ -27,9 +27,11 @@ export async function matchVendor(tx: Tx, name: string): Promise<VendorMatch | n
  * one with status `draft` for the admin to complete. Idempotent on the exact name.
  */
 export async function vendorForName(tx: Tx, companyId: number, name: string): Promise<VendorMatch> {
-  const match = await matchVendor(tx, name);
-  if (match) return match;
   const clean = name.trim().replace(/\s+/g, ' ');
+  // callers validate; this guard keeps a blank master vendor out even if one does not
+  if (clean.length < 2) throw new RangeError('Nama vendor kosong atau terlalu pendek.');
+  const match = await matchVendor(tx, clean);
+  if (match) return match;
   await tx.insert(vendors).values({ companyId, name: clean, status: 'draft' }).onConflictDoNothing({ target: [vendors.companyId, vendors.name] });
   const [row] = await tx.select({ id: vendors.id, name: vendors.name, defaultCategory: vendors.defaultCategory })
     .from(vendors).where(and(eq(vendors.companyId, companyId), eq(vendors.name, clean)));

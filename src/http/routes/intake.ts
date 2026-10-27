@@ -24,7 +24,7 @@ const ReviewPatch = z.object({
   category: z.enum(CATEGORIES).optional(),
   totalCents: z.union([z.number().int().positive(), z.string().min(1)]).optional(),
   vendorId: IdParam.optional(),
-  vendorName: z.string().min(2).max(200).optional(),
+  vendorName: z.string().trim().min(2).max(200).optional(),
   invoiceDate: z.string().min(6).max(30).optional(),
   docNumber: z.string().min(1).max(100).optional(),
   status: z.enum(['terkonfirmasi', 'ditolak']).optional(),
@@ -41,7 +41,7 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
     if (q.siteId) where.push(eq(vendorInvoices.siteId, q.siteId));
     const rows = await withCompany(db, c.get('tenant'), (tx) =>
       tx.select().from(vendorInvoices).where(and(...where)).orderBy(desc(vendorInvoices.createdAt), asc(vendorInvoices.id)).limit(q.limit));
-    return c.json({ data: rows.map(publicRow) });
+    return c.json({ data: rows.map((r) => publicRow(r, c.get('role'))) });
   });
 
   app.patch('/companies/:companyId/intake/:rowId', requireRole(EDIT_ROLES), async (c) => {
@@ -65,7 +65,7 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
     if (body.status) changes.push({ field: 'status', value: body.status });
 
     const r = await withCompany(db, c.get('tenant'), (tx) => applyChanges(tx, rowId, changes, { channel: 'admin', userId: c.get('userId'), today: now() }));
-    if (r.ok) return c.json({ data: publicRow(r.row) });
+    if (r.ok) return c.json({ data: publicRow(r.row, c.get('role')) });
     if (r.reason === 'not_found') notFound('Nota tidak ditemukan.');
     const message = r.reason === 'closed' ? 'Nota sudah ditutup (terkonfirmasi/ditolak).'
       : r.reason === 'confirm_blocked' ? 'Belum bisa dikonfirmasi.' : 'Sudah ada nota terkonfirmasi dengan vendor, tanggal, dan total yang sama.';
@@ -89,8 +89,11 @@ export function registerIntakeRoutes(app: App, { db, now }: RouteDeps, storage: 
   });
 }
 
-/** API shape: no internal id (LLD §2: row_id is the public reference). */
-function publicRow(r: VendorInvoiceRow) {
+/**
+ * API shape: no internal id (LLD §2: row_id is the public reference), and the vendor NPWP read from
+ * the receipt only for finance and managers (HLD §8, as in the vendors API).
+ */
+function publicRow(r: VendorInvoiceRow, role: string) {
   const { id: _id, companyId: _companyId, ...rest } = r;
-  return rest;
+  return (FINANCE_ROLES as readonly string[]).includes(role) ? rest : { ...rest, npwp: null };
 }

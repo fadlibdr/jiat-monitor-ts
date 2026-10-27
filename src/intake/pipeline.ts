@@ -59,14 +59,14 @@ export function intakeRegistry(deps: IntakeDeps): Registry {
       run: (job) => processPhoto(deps, job),
       backoffSeconds: [30, 120, 600],
       onGiveUp: async (job, error) => {
-        const ev = await finish(deps, job, 'gagal', REPLY.failure, String(error));
+        const ev = await giveUp(deps, job, FINAL_PHOTO, REPLY.failure, error);
         deps.log('intake_photo_failed', { companyId: job.companyId, chatId: ev?.chatId, messageId: ev?.messageId });
       },
     },
     [JOB_CORRECTION]: {
       run: (job) => processCorrection(deps, job),
       backoffSeconds: [10, 60],
-      onGiveUp: async (job, error) => { await finish(deps, job, 'gagal', REPLY.correctionFailed, String(error)); },
+      onGiveUp: async (job, error) => { await giveUp(deps, job, FINAL_CORRECTION, REPLY.correctionFailed, error); },
     },
   };
 }
@@ -174,12 +174,22 @@ export async function processPhoto(deps: IntakeDeps, job: Job): Promise<void> {
       return { rowId: inv!.rowId, status: inv!.status };
     });
   } catch (e) {
-    if (pgCode(e) === '23505') {
+    const code = pgCode(e);
+    if (code === '23505') {
       // the same photo was saved by a concurrent job between our V8 check and now: keep its file
       await finish(deps, job, 'duplikat', duplicateReply((await findBySha(deps, companyId, sha256)) ?? null));
       return;
     }
-    await storage.delete(key);
+    // the key is content-addressed, so the file may belong to a committed row (an unknown COMMIT
+    // outcome, or another event with the same bytes): delete it only when no attachment points at it
+    try {
+      if ((await findBySha(deps, companyId, sha256)) === undefined) await storage.delete(key);
+    } catch {
+      // database unreachable: an orphan file is harmless, deleting a committed original is not
+    }
+    // data errors (22xxx) and constraint errors (23xxx) repeat identically on every attempt: retrying
+    // would only pay for OCR again, so fail now (onGiveUp asks staff to resend)
+    if (code?.startsWith('22') || code?.startsWith('23')) throw new PermanentJobError(`data ditolak database (${code})`);
     throw e;
   }
 
@@ -202,7 +212,12 @@ export async function processCorrection(deps: IntakeDeps, job: Job): Promise<voi
   if (!sender) return void (await setOutcome(deps, ev, 'diabaikan'));
 
   const rowId = await resolveRow(deps, ev, corr, replyToMessageId);
-  if (!rowId) return void (await finish(deps, job, 'koreksi_ditolak', REPLY.ambiguousRef));
+  if (!rowId) {
+    // "#xxxx" typed on purpose deserves an answer; a reply to some other message (another bot's,
+    // or a summary older than our records) is not addressed to us — stay quiet (LLD §7)
+    if (corr.rowRef) return void (await finish(deps, job, 'koreksi_ditolak', REPLY.ambiguousRef));
+    return void (await setOutcome(deps, ev, 'diabaikan'));
+  }
   if ('error' in corr) return void (await finish(deps, job, 'koreksi_ditolak', REPLY.valueError(corr.error)));
 
   const change = toChange(corr);
@@ -252,7 +267,13 @@ async function resolveSender(deps: IntakeDeps, ev: EventRow): Promise<{ userId: 
   });
 }
 
-/** Reply to a bot summary → that summary's row; else "#xxxx" → the one open row at this site ending in xxxx. */
+/** A "#xxxx" also finds rows closed this recently, so staff get "sudah dikonfirmasi" rather than "not found". */
+const CLOSED_REF_WINDOW_DAYS = 30;
+
+/**
+ * Reply to a bot summary → that summary's row. Else "#xxxx" → the one row at this site ending in
+ * xxxx: open rows first, then rows closed in the last 30 days (4 hex digits collide across years).
+ */
 async function resolveRow(deps: IntakeDeps, ev: EventRow, corr: Correction, replyToMessageId: number | null): Promise<string | null> {
   return withCompany(deps.db, ev.companyId, async (tx) => {
     if (replyToMessageId !== null) {
@@ -263,12 +284,16 @@ async function resolveRow(deps: IntakeDeps, ev: EventRow, corr: Correction, repl
       if (src) return src.rowId;
     }
     if (corr.rowRef) {
-      const rows = await tx.select({ rowId: vendorInvoices.rowId }).from(vendorInvoices).where(and(
-        eq(vendorInvoices.siteId, ev.siteId),
-        inArray(vendorInvoices.status, ['perlu_konfirmasi', 'perlu_cek']),
-        sql`right(replace(${vendorInvoices.rowId}::text, '-', ''), 4) = ${corr.rowRef}`,
+      const byRef = sql`right(replace(${vendorInvoices.rowId}::text, '-', ''), 4) = ${corr.rowRef}`;
+      const open = await tx.select({ rowId: vendorInvoices.rowId }).from(vendorInvoices).where(and(
+        eq(vendorInvoices.siteId, ev.siteId), inArray(vendorInvoices.status, ['perlu_konfirmasi', 'perlu_cek']), byRef,
       )).limit(2);
-      if (rows.length === 1) return rows[0]!.rowId;
+      if (open.length) return open.length === 1 ? open[0]!.rowId : null;
+      const since = new Date(deps.now().getTime() - CLOSED_REF_WINDOW_DAYS * 86_400_000);
+      const closed = await tx.select({ rowId: vendorInvoices.rowId }).from(vendorInvoices).where(and(
+        eq(vendorInvoices.siteId, ev.siteId), inArray(vendorInvoices.status, ['terkonfirmasi', 'ditolak']), gte(vendorInvoices.updatedAt, since), byRef,
+      )).limit(2);
+      if (closed.length === 1) return closed[0]!.rowId;
     }
     return null;
   });
@@ -327,6 +352,16 @@ async function findBySha(deps: IntakeDeps, companyId: number, sha256: string): P
 async function setOutcome(deps: IntakeDeps, ev: EventRow, outcome: IntakeOutcome, error: string | null = null): Promise<void> {
   await withCompany(deps.db, ev.companyId, (tx) =>
     tx.update(intakeEvents).set({ outcome, error, updatedAt: new Date() }).where(eq(intakeEvents.id, ev.id)));
+}
+
+/**
+ * The job failed for good. Never overwrites an outcome that is already final (e.g. the row was
+ * saved and only a later step failed) and never sends a failure reply after a success reply.
+ */
+async function giveUp(deps: IntakeDeps, job: Job, finals: readonly IntakeOutcome[], reply: string, error: unknown): Promise<EventRow | null> {
+  const ev = await loadEvent(deps, job).catch(() => null);
+  if (!ev || finals.includes(ev.outcome)) return ev;
+  return finish(deps, job, 'gagal', reply, String(error).slice(0, 500));
 }
 
 /** Final outcome first (so a reply failure cannot cause a second processing), then the reply. */

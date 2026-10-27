@@ -65,14 +65,39 @@ export function recomputeFlags(row: FlagInput, previous: readonly string[], site
   return [...out];
 }
 
+/** A refusal: thrown inside the savepoint so everything the attempt wrote is rolled back. */
+class Refused extends Error {
+  constructor(readonly result: ApplyResult) {
+    super('refused');
+  }
+}
+
+/**
+ * Applies the changes atomically: in a savepoint, so a refused change (409) leaves nothing behind —
+ * not even a draft vendor created while resolving a VENDOR name. The confirmed-twin fence is
+ * company-wide (partial unique index), but the caller may be site-scoped and unable to see a twin
+ * at another site, so the index violation itself is also answered as duplicate_confirmed.
+ */
 export async function applyChanges(
   tx: Tx, rowId: string, changes: readonly Change[], ctx: { channel: Channel; userId: number | null; today: Date },
 ): Promise<ApplyResult> {
+  try {
+    return await tx.transaction((sp) => applyInSavepoint(sp as Tx, rowId, changes, ctx));
+  } catch (e) {
+    if (e instanceof Refused) return e.result;
+    if (pgCode(e) === '23505') return { ok: false, reason: 'duplicate_confirmed' };
+    throw e;
+  }
+}
+
+async function applyInSavepoint(
+  tx: Tx, rowId: string, changes: readonly Change[], ctx: { channel: Channel; userId: number | null; today: Date },
+): Promise<ApplyResult> {
   const [current] = await tx.select().from(vendorInvoices).where(eq(vendorInvoices.rowId, rowId)).for('update');
-  if (!current) return { ok: false, reason: 'not_found' };
+  if (!current) throw new Refused({ ok: false, reason: 'not_found' });
   const closed = current.status === 'terkonfirmasi' || current.status === 'ditolak';
   // chat may not touch a closed row (LLD §7); the review screen may still fix data, not reopen
-  if (closed && (ctx.channel === 'chat' || changes.some((c) => c.field === 'status'))) return { ok: false, reason: 'closed', row: current };
+  if (closed && (ctx.channel === 'chat' || changes.some((c) => c.field === 'status'))) throw new Refused({ ok: false, reason: 'closed', row: current });
 
   const next = { ...current };
   let wantStatus: 'terkonfirmasi' | 'ditolak' | null = null;
@@ -91,7 +116,7 @@ export async function applyChanges(
       }
       case 'vendorId': {
         const [v] = await tx.select({ id: vendors.id, name: vendors.name, defaultCategory: vendors.defaultCategory }).from(vendors).where(eq(vendors.id, ch.value));
-        if (!v) return { ok: false, reason: 'not_found' };
+        if (!v) throw new Refused({ ok: false, reason: 'not_found' });
         next.vendorId = v.id;
         next.vendorName = v.name;
         next.category ??= v.defaultCategory;
@@ -112,20 +137,20 @@ export async function applyChanges(
   if (wantStatus === 'ditolak') next.status = 'ditolak';
   if (wantStatus === 'terkonfirmasi') {
     const blocking = flags.filter((f) => CONFIRM_BLOCKERS[ctx.channel].includes(f));
-    if (blocking.length) return { ok: false, reason: 'confirm_blocked', flags: blocking, row: current };
+    if (blocking.length) throw new Refused({ ok: false, reason: 'confirm_blocked', flags: blocking, row: current });
     // a confirmed invoice always points at a master vendor, so reports and the fence below work
     if (!next.vendorId && next.vendorName) {
       const v = await vendorForName(tx, current.companyId, next.vendorName);
       next.vendorId = v.id;
       next.vendorName = v.name;
     }
-    // second fence (LLD §6): one confirmed invoice per vendor + date + total; the partial unique
-    // index enforces it too, this check only turns the conflict into a clear answer
+    // second fence (LLD §6): one confirmed invoice per vendor + date + total. This check answers the
+    // visible case with the row; the partial unique index catches the rest (see applyChanges)
     const [twin] = await tx.select({ id: vendorInvoices.id }).from(vendorInvoices).where(and(
       eq(vendorInvoices.status, 'terkonfirmasi'), eq(vendorInvoices.vendorId, next.vendorId!),
       eq(vendorInvoices.invoiceDate, next.invoiceDate!), eq(vendorInvoices.totalCents, next.totalCents), ne(vendorInvoices.id, current.id),
     )).limit(1);
-    if (twin) return { ok: false, reason: 'duplicate_confirmed', row: current };
+    if (twin) throw new Refused({ ok: false, reason: 'duplicate_confirmed', row: current });
     next.status = 'terkonfirmasi';
     next.confirmedAt = new Date();
     next.confirmedBy = ctx.userId;
@@ -137,4 +162,8 @@ export async function applyChanges(
     confirmedAt: next.confirmedAt, confirmedBy: next.confirmedBy,
   }).where(eq(vendorInvoices.id, current.id)).returning();
   return { ok: true, row: row! };
+}
+
+function pgCode(err: unknown): string | undefined {
+  return (err as { code?: string; cause?: { code?: string } })?.cause?.code ?? (err as { code?: string })?.code;
 }

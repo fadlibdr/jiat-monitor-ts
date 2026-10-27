@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -124,6 +124,14 @@ describe('LocalDiskStorage', () => {
     await s.delete('company-1/intake/2026/10/abc.jpg');
     await s.delete('company-1/intake/2026/10/abc.jpg');
     await expect(s.get('company-1/intake/2026/10/abc.jpg')).rejects.toThrow();
+  });
+
+  it('writes atomically: no temp file is left behind, and concurrent puts of one key keep one complete copy', async () => {
+    const s = new LocalDiskStorage(root);
+    const bytes = Buffer.alloc(256 * 1024, 7);
+    await Promise.all(Array.from({ length: 5 }, () => s.put('company-2/intake/2026/10/same.jpg', bytes, 'image/jpeg')));
+    expect((await s.get('company-2/intake/2026/10/same.jpg')).equals(bytes)).toBe(true);
+    expect((await readdir(join(root, 'company-2/intake/2026/10'))).filter((f) => f.endsWith('.tmp'))).toEqual([]);
   });
 
   it('refuses keys that could escape the root', async () => {
