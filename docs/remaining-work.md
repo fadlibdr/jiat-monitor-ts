@@ -28,7 +28,7 @@ Gap analysis of this repository against the design documents, as of **27 Oct 202
   | Jobs (§9) | **0 of 6** | |
   | Materialized views (§8) | **0 of 4** | |
   | Test areas (§10) | **3 done, 3 partial, 5 not started** | |
-  | CI | none | |
+  | CI | ✅ `.github/workflows/ci.yml` | typecheck, tests, build, migration drift |
 
 **Biggest risk:** the HLD's 9–10-week plan assumed a fork of Nusantara ERP. Contract, procurement, finance, audit and the Livewire UI would have been "Fork, disesuaikan" (HLD §4, LLD §1). This repo is a from-scratch TypeScript rewrite "tanpa ERP" (README), so none of that reuse applies. The remaining scope is larger than the plan's remaining weeks suggest.
 
@@ -59,7 +59,7 @@ The LLD describes Laravel 12 + Livewire 3 on a Nusantara ERP fork. This repo use
 |---|---|---|---|
 | 1 Fondasi | BOQ Keerom imported = RAB | ❌ Not met | The importer is proven only on synthetic layouts. No `versi_2_RAPI` fixture, no Keerom contract DPP (README "Belum ada" #2). |
 | | A cannot see B | ✅ Met (backend) | `test/db/tenancy.test.ts`: RLS covers raw SQL, `WITH CHECK` and no-context, which is stronger than the LLD. |
-| | Holding can read all contracts | ⚠️ Partial | The DB role `jiat_holding` can, but the only holding route is `GET /holding/companies` (`src/http/app.ts:116`). |
+| | Holding can read all contracts | ✅ Met | `GET /holding/contracts` with filters; every request is logged (`test/http/contracts-admin-holding.test.ts`). |
 | 2 Intake | Golden set of 30 photos: total accuracy ≥ 95 %, zero duplicates | ❌ Not started | Rules exist, integration does not. The 30 photos have not been collected (deck slide 10, item 4). |
 | 3 Pembelian & progres | One PR→PO→GR→opname cycle correct and traceable | ❌ Not started | No tables, routes or screens. |
 | 4 Invoicing & dashboard | First termin issued with no manual input; holding = Σ detail; non-holding rejected at `/api/holding` | ❌ Not started | Only the 403-for-non-holding behaviour exists, on the single holding route. |
@@ -73,24 +73,24 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
 
 ### 4.1 Company & access — M
 
-- [ ] **Enforce site scoping.** `company_users.site_ids` is stored (`schema.ts:83`) but never applied: `GET /companies/:id/sites` returns every site (`app.ts:162`). HLD §2 limits *Staf site* to their assigned site. Enforce it in RLS (a second setting such as `app.site_ids`) or in the route layer, and add tests.
-- [ ] **Model the system admin as global.** HLD §2 has *Admin sistem* manage companies, users and the Telegram mapping. The repo has `system_admin` as a per-company role, and any signed-in user may `POST /companies` (`app.ts:104`). Decide on a global admin flag and restrict company creation.
-- [ ] **Map the `finance` role.** It exists in `COMPANY_ROLES` but is granted nothing (`app.ts:64-65`), and the README role ladder omits it. Map it to the invoicing and payment routes.
-- [ ] **Manage `management_viewers` over the API.** Today it is SQL only (README #5). Record `granted_by` and `granted_at`.
-- [ ] **Add update and delete routes** (`PUT`/`DELETE`) for sites, contracts and members (README #5).
-- [ ] **Add missing columns.**
+- [x] **Enforce site scoping.** `company_users.site_ids` is stored (`schema.ts:83`) but never applied: `GET /companies/:id/sites` returns every site (`app.ts:162`). HLD §2 limits *Staf site* to their assigned site. Enforce it in RLS (a second setting such as `app.site_ids`) or in the route layer, and add tests. — **Done:** RESTRICTIVE RLS policy per tenant table (`src/db/rls.ts`), `withCompany({siteIds})`; tests in `test/db/site-scope-audit.test.ts`.
+- [x] **Model the system admin as global.** HLD §2 has *Admin sistem* manage companies, users and the Telegram mapping. The repo has `system_admin` as a per-company role, and any signed-in user may `POST /companies` (`app.ts:104`). Decide on a global admin flag and restrict company creation. — **Done:** `users.is_system_admin`, `/admin/*`; company creation moved to `POST /admin/companies`.
+- [ ] **Map the `finance` role.** *(Partly done: `FINANCE_ROLES` defined; the invoicing routes it guards arrive in Phase 4.)* It exists in `COMPANY_ROLES` but is granted nothing (`app.ts:64-65`), and the README role ladder omits it. Map it to the invoicing and payment routes.
+- [x] **Manage `management_viewers` over the API.** Today it is SQL only (README #5). Record `granted_by` and `granted_at`. — **Done:** `/admin/management-viewers` records `granted_by`/`granted_at`.
+- [x] **Add update and delete routes** (`PUT`/`DELETE`) for sites, contracts and members (README #5). — **Done:** PATCH sites/contracts, DELETE members (last-manager guard). Sites/contracts are closed via `status`, not deleted.
+- [x] **Add missing columns.** — **Done:** bank fields, `users.phone`, `created_by`/`updated_by` (filled by trigger).
   - `companies.bank_name`, `bank_account`, `logo_path` (LLD §2; needed to print invoices)
   - `users.phone`
   - `created_by` / `updated_by` on every table (LLD §2)
-- [ ] **Link Telegram identities to users.** LLD §7 ignores corrections from senders who are not members, but no table links a Telegram user id to `users`. Add `users.telegram_user_id` and a linking flow, for example `/start <one-time code>`. See §5.12.
-- [ ] **Rate-limit sign-in** on `/api/auth/sign-in/email` (README #4).
+- [ ] **Link Telegram identities to users.** *(Partly done: `users.telegram_user_id` + `PATCH /admin/users/:id`; a self-service `/start <code>` flow is still open.)* LLD §7 ignores corrections from senders who are not members, but no table links a Telegram user id to `users`. Add `users.telegram_user_id` and a linking flow, for example `/start <one-time code>`. See §5.12.
+- [x] **Rate-limit sign-in** on `/api/auth/sign-in/email` (README #4). — **Done:** 5/min/IP + `AUTH_TRUSTED_PROXIES`.
 
 ### 4.2 Site & contract — M
 
-- [ ] **Add `contract_terms`** (seq, name, percent, trigger_progress_pct, amount_dpp, due_days; unique `(contract_id, seq)`), with CRUD.
-- [ ] **Add `contract_addendums`** (value_delta, end_date_new). Effective value and end date are derived from them; the mockup's "termasuk adendum Rp 1,2 M" depends on this.
-- [ ] **Store retention and advance (uang muka) parameters** on the contract. They are missing from the LLD entirely; see §5.1.
-- [ ] **Validate termin percentages:** Σ termin percent = 100 % and the termin amounts reconcile with DPP.
+- [x] **Add `contract_terms`** (seq, name, percent, trigger_progress_pct, amount_dpp, due_days; unique `(contract_id, seq)`), with CRUD. — **Done:** basis-point percent and trigger; amount derived at invoice time.
+- [x] **Add `contract_addendums`** (value_delta, end_date_new). Effective value and end date are derived from them; the mockup's "termasuk adendum Rp 1,2 M" depends on this.
+- [x] **Store retention and advance (uang muka) parameters** on the contract. They are missing from the LLD entirely; see §5.1. — **Done:** `contracts.retention_bp`, `advance_cents`.
+- [x] **Validate termin percentages:** Σ termin percent = 100 % and the termin amounts reconcile with DPP. — **Done:** Σ ≤ 100 % (draft allowed, `complete` flag), non-decreasing triggers; rounding reconciliation lands with invoicing.
 
 ### 4.3 BOQ — M
 
@@ -225,7 +225,7 @@ None exists. In rough pilot-priority order:
 | Intake end-to-end (OCR mocked) | ❌ | — |
 | Invoicing | ❌ | — |
 | Holding reconciliation | ❌ | — |
-| Holding access | ⚠️ | 200 for a holding user and 403 for others ✅. Audit row ❌. `companies[]` filter ❌. |
+| Holding access | ✅ | 200 / 403, audit row and `companies[]` filter: `test/http/contracts-admin-holding.test.ts`. |
 | Golden set OCR | ❌ | Needs the 30 photos. |
 
 ---

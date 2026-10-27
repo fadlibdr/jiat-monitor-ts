@@ -21,76 +21,95 @@ Stack: Node ≥ 22 · TypeScript (strict) · Hono · Drizzle ORM · PostgreSQL 1
 | Total nota `0` | Lolos V2 | Ditolak (`total > 0`) | L5 |
 | `value_total` kontrak | Disimpan bebas | Diturunkan: `value_dpp_cents` + `ppn_rate_bp` | L8 |
 | Header RAB "Jumlah" = volume | Kolom tertukar | ≥ 2 header jumlah/total tanpa "Volume": pertama = qty, terakhir = jumlah; `harga == jumlah` ditolak | L1 |
+| Lingkup site | — | Policy RLS **RESTRICTIVE** per tabel (`src/db/rls.ts`): `site_staff` hanya melihat site di `site_ids` (kosong = tidak ada site); turun ke kontrak, termin, versi & item BOQ | HLD §2 |
+| Audit | Observer Eloquent | **Trigger Postgres** `SECURITY DEFINER` (`src/db/audit.ts`): before/after setiap perubahan + setiap akses holding; role app hanya bisa membaca log perusahaannya, tidak bisa menulis/mengubah/menghapus. `created_by`/`updated_by` diisi trigger | LLD §2, §9 |
+| Admin sistem | Peran per perusahaan | Bendera global `users.is_system_admin`: kelola perusahaan, pengguna, keanggotaan, holding viewer — **bukan** anggota perusahaan, tidak melihat data transaksi | HLD §2 |
+| Addendum | — | Nilai & tanggal selesai efektif **diturunkan** (`src/domain/contract.ts`); impor BOQ dicocokkan ke DPP efektif | HLD §1 |
 
 ## Auth (standalone, tanpa ERP)
 
 Better Auth 1.7 (`src/auth/better-auth.ts`): email + password, sesi **server-side** di tabel `sessions`,
 cookie `jiat.session_token` httpOnly/SameSite=Lax (Secure di production), cookie cache dimatikan sehingga
 setiap request terproteksi memvalidasi sesi ke database. Id user serial (`users.id`) → dipakai langsung
-oleh `company_users`. Sign-up mandiri **tertutup** secara default; buat pengguna lewat CLI (password dari stdin):
+oleh `company_users`. Sign-up mandiri **tertutup** secara default; buat pengguna lewat CLI (password dari stdin).
+Admin sistem pertama dibuat dengan `--system-admin`; selanjutnya lewat `PATCH /admin/users/:id`:
 
 ```bash
-echo -n 'password-minimal-12-karakter' | npx tsx src/cli/create-user.ts admin@pii.co.id "Admin PII"
+echo -n 'password-minimal-12-karakter' | npx tsx src/cli/create-user.ts admin@pii.co.id "Admin PII" --system-admin
 ```
 
 Endpoint Better Auth di `/api/auth/*` (`sign-in/email`, `sign-out`, `get-session`, …).
+Sign-in dibatasi **5 percobaan / menit / IP** (aktif di production, atau `AUTH_RATE_LIMIT=1`). Di belakang nginx,
+isi `AUTH_TRUSTED_PROXIES` (mis. `127.0.0.1/32`); tanpa itu hanya `X-Forwarded-For` bernilai tunggal yang dipercaya.
+Store rate limit ada di memori: benar untuk satu instance API (pilot); instance kedua butuh store bersama.
+Pengguna yang dinonaktifkan (`isActive: false`) langsung kehilangan semua sesinya dan ditolak `403`.
 
 ## Struktur
 
 ```
-src/domain/        money, date, hamming, categories, correction, receipt-validator  (murni, tanpa I/O)
-src/boq/           parser (exceljs → pohon, sen), importer (versi + bobot Σ = 100 %), errors
-src/db/            schema (Drizzle), rls (DDL policy), tenant (withCompany / withHoldingRead / withApp), client, migrate
+src/domain/        money, date, hamming, categories, correction, receipt-validator, contract  (murni, tanpa I/O)
+src/boq/           parser (exceljs → pohon, sen), importer (versi + bobot Σ = 100 % terhadap DPP efektif), errors
+src/db/            schema (Drizzle), rls (policy perusahaan + site), audit (trigger), ddl (urutan DDL pasca-migrasi),
+                   tenant (withCompany / withHoldingRead / withApp), client, migrate
 src/auth/          Authenticator interface; better-auth.ts (produksi); headerAuthenticator (test saja, menolak production)
-src/http/          Hono app: /api/auth/*, /health, /me, /companies (+ members, sites, contracts, boq)
+src/http/          app.ts (komposisi, error), context.ts (middleware, peran), routes/{admin,company,holding,members}.ts
 src/cli/           create-user.ts
-test/              144 test (unit domain, parser, importer & RLS tenancy di PGlite, auth + CRUD + BOQ HTTP end-to-end)
+test/              unit domain, parser, importer, RLS + lingkup site + audit di PGlite, auth + CRUD + holding HTTP end-to-end
 ```
 
 ## Menjalankan
 
 ```bash
 npm install
-npm test            # 144 test, tanpa Postgres eksternal (PGlite)
+npm test            # 189 test, tanpa Postgres eksternal (PGlite)
 npm run typecheck
 npm run build
 
 # Postgres sungguhan
 cp .env.example .env            # isi DATABASE_URL (role jiat_app, BUKAN owner) dan DATABASE_URL_MIGRATE (owner)
 npm run db:generate             # drizzle/ dari src/db/schema.ts
-npm run db:migrate              # migrasi + policy RLS (dijalankan sebagai owner)
+npm run db:migrate              # migrasi + policy RLS + trigger audit (dijalankan sebagai owner)
 npm run dev
 ```
+
+CI (`.github/workflows/ci.yml`) menjalankan typecheck, test, build, dan menolak perubahan `schema.ts` tanpa migrasi di `drizzle/`.
 
 Role Postgres yang dibutuhkan (dibuat `db:migrate`, kecuali login): `jiat_app` (NOLOGIN, RLS), `jiat_holding` (NOLOGIN, SELECT lintas perusahaan).
 Role login di `DATABASE_URL` harus **anggota** keduanya dan **bukan** pemilik tabel — jika pemilik, RLS dilewati (superuser/owner bypass).
 
 ## API
 
-Peran per perusahaan (`company_users.role`): `site_staff` < `project_admin` < `company_manager` < `system_admin`.
-Baca: semua anggota. Buat site/kontrak/impor BOQ: `project_admin`+. Kelola anggota: `company_manager`+.
+Peran per perusahaan (`company_users.role`): `site_staff`, `project_admin`, `finance`, `company_manager`, `system_admin`.
+Baca: semua anggota (dalam lingkup site-nya). Site/kontrak/termin/addendum/impor BOQ: `project_admin`, `company_manager`, `system_admin`.
+Kelola anggota: `company_manager`, `system_admin`. `finance`: tagihan & pembayaran (Fase 4).
+Lingkup site: `site_staff` hanya site di `siteIds` (belum ditugaskan = tidak ada); peran lain semua site kecuali `siteIds` diisi.
+Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_viewers`) **bukan** konteks perusahaan.
 
 | Method | Path | Catatan |
 |---|---|---|
 | GET | `/health` | — |
 | POST | `/api/auth/sign-in/email` … | Better Auth |
 | GET | `/me/companies` | perusahaan + peran si pemanggil |
-| POST | `/companies` | pendiri menjadi `company_manager`; `409` kode ganda |
-| GET/POST | `/companies/:companyId/members` | `{email, role, siteIds?}`; upsert; `404` email belum terdaftar |
-| GET/POST | `/companies/:companyId/sites` | `409` kode ganda per perusahaan |
-| GET/POST | `/companies/:companyId/contracts` | `valueTotalCents` diturunkan dari DPP × PPN; `404` site milik perusahaan lain |
-| GET | `/holding/companies` | hanya `management_viewers`; read-only |
+| GET/POST/DELETE | `/companies/:companyId/members[/:userId]` | `{email, role, siteIds?}`; upsert; `404` email belum terdaftar; `409` bila menghapus/menurunkan `company_manager` terakhir |
+| GET/POST | `/companies/:companyId/sites` · PATCH `…/sites/:siteId` | `409` kode ganda per perusahaan |
+| GET/POST | `/companies/:companyId/contracts` | nilai efektif (DPP + addendum), `valueTotalCents`, `endDateEffective`, `daysLeft` diturunkan; `404` site milik perusahaan lain |
+| GET/PATCH | `/companies/:companyId/contracts/:contractId` | GET + termin + addendum; PATCH tidak menerima DPP (lewat addendum); `400` uang muka > DPP |
+| GET/PUT | `/companies/:companyId/contracts/:contractId/terms` | PUT mengganti seluruh jadwal; `400` Σ > 100 % / ambang progres menurun; `complete` bila Σ = 100 % |
+| GET/POST | `/companies/:companyId/contracts/:contractId/addendums` | `{number, signedAt, valueDeltaCents?, endDateNew?}`; `400` bila DPP efektif ≤ 0 |
 | POST | `/companies/:companyId/contracts/:contractId/boq/import?sheet=RAB` | multipart `file` (.xlsx ≤ 15 MB). `201` ringkasan; `422` `{error: total_mismatch\|sheet_missing\|…, details}`; tidak ada yang ditulis saat gagal |
 | GET | `/companies/:companyId/contracts/:contractId/boq` | versi `is_current` + item |
+| GET | `/holding/companies` · `/holding/contracts` | hanya `management_viewers`; read-only; filter `companies[]`, `site_id`, `employer`, `status`; setiap request dicatat di `audit_logs` |
+| GET/POST/PATCH | `/admin/companies[/:companyId]` | admin sistem; `managerEmail` = `company_manager` pertama |
+| GET/POST/DELETE | `/admin/companies/:companyId/members[/:userId]` | sama seperti di atas, tanpa harus menjadi anggota |
+| GET/PATCH | `/admin/users[/:userId]` | `telegramUserId`, `phone`, `isActive`, `isSystemAdmin`; `409` menonaktifkan/mencabut diri sendiri |
+| GET/POST/DELETE | `/admin/management-viewers[/:userId]` | `{email, role: holding_viewer\|direksi}` |
 
-Semua `/companies/:companyId/*` → `401` tanpa principal, `403` bila bukan anggota perusahaan tersebut (termasuk holding viewer), `400` id tidak valid.
+Semua `/companies/:companyId/*` → `401` tanpa principal, `403` bila bukan anggota perusahaan tersebut (termasuk holding viewer dan admin sistem), `400` id tidak valid; data di luar lingkup site → `404`.
 
 ## Belum ada (urutan berikutnya)
 
 Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding: [`docs/remaining-work.md`](docs/remaining-work.md).
 
-1. Intake Fase 2: webhook WhatsApp/Telegram, job OCR, `vendor_invoices`, V8–V10 (sha256/pHash/trigram) — `hamming.ts` dan `receipt-validator.ts` sudah siap dipakai.
+1. Intake Fase 2: webhook Telegram, job OCR, `vendor_invoices`, V8–V10 (sha256/pHash/trigram) — `hamming.ts` dan `receipt-validator.ts` sudah siap dipakai.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
 3. Materialized view progres (LLD §8) — join ke `is_leaf`, bobot sudah di-rollup ke induk.
-4. Rate limiting pada `/api/auth/sign-in/email` (Better Auth punya opsi `rateLimit`; aktifkan dengan store Redis saat ada lebih dari satu instance).
-5. PUT/DELETE untuk sites/contracts/members, dan `management_viewers` lewat API (sekarang lewat SQL).

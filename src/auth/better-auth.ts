@@ -11,7 +11,17 @@ export interface AuthOptions {
   trustedOrigins?: string[]; // browser origins allowed to call /api/auth
   allowSignUp?: boolean; // default false: users are created by an admin / CLI, not self-service
   secureCookies?: boolean; // default: true in production
+  /** default: Better Auth's own (on when NODE_ENV=production) */
+  rateLimit?: boolean;
+  /**
+   * CIDRs of the reverse proxy (e.g. nginx on the VPS: 127.0.0.1/32). Without it only a single-value
+   * X-Forwarded-For is trusted, so behind a proxy every client would share one rate-limit bucket.
+   */
+  trustedProxies?: string[];
 }
+
+/** Brute-force guard on password sign-in, per client IP (README: Auth). */
+export const SIGN_IN_RATE_LIMIT = { window: 60, max: 5 } as const;
 
 /**
  * Better Auth instance: email+password, server-side sessions in `sessions`, httpOnly cookie,
@@ -38,10 +48,16 @@ export function createAuth(db: Db, opt: AuthOptions) {
       updateAge: 60 * 60 * 24, // refresh at most daily
       cookieCache: { enabled: false }, // every protected request hits the sessions table (server-side validation)
     },
+    rateLimit: {
+      ...(opt.rateLimit !== undefined ? { enabled: opt.rateLimit } : {}),
+      // in-memory store: correct for the single API instance of the pilot; a second instance needs a shared store
+      customRules: { '/sign-in/email': { ...SIGN_IN_RATE_LIMIT } },
+    },
     advanced: {
       database: { generateId: 'serial' },
       cookiePrefix: 'jiat',
       ...(opt.secureCookies !== undefined ? { useSecureCookies: opt.secureCookies } : {}),
+      ...(opt.trustedProxies?.length ? { ipAddress: { trustedProxies: opt.trustedProxies } } : {}),
     },
   });
 }

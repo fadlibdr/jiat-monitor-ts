@@ -38,9 +38,20 @@ const ContractBody = z.object({
   endDate: z.iso.date().optional(),
   status: z.enum(CONTRACT_STATUSES).default('active'),
 });
-/** The DPP itself changes only through an addendum, so it is not patchable. */
-const ContractPatch = ContractBody.omit({ siteId: true, number: true, valueDppCents: true }).partial()
-  .refine((b) => Object.keys(b).length > 0, 'body kosong');
+/**
+ * Written out instead of ContractBody.partial(): the body's defaults (ppn 11 %, status active…) must
+ * never be applied to fields a PATCH did not send. The DPP itself changes only through an addendum.
+ */
+const ContractPatch = z.object({
+  employerName: z.string().min(2).max(200).optional(),
+  ppnRateBp: z.number().int().min(0).max(10_000).optional(),
+  retentionBp: z.number().int().min(0).max(10_000).optional(),
+  advanceCents: z.number().int().min(0).optional(),
+  signedAt: z.iso.date().optional(),
+  startDate: z.iso.date().optional(),
+  endDate: z.iso.date().optional(),
+  status: z.enum(CONTRACT_STATUSES).optional(),
+}).refine((b) => Object.keys(b).length > 0, 'body kosong');
 
 const TermBody = z.object({
   seq: z.number().int().min(1).max(99),

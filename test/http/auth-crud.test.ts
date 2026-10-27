@@ -100,6 +100,18 @@ describe('Better Auth integration', () => {
     expect((await post('/api/auth/sign-in/email', {})).status).toBe(400);
   });
 
+  it('sign-in is rate limited per client IP: 5 attempts a minute, the 6th is 429; another IP is unaffected', async () => {
+    const limited = createAuth(db, { secret: SECRET, baseURL: BASE, secureCookies: false, rateLimit: true });
+    const limitedApp = createApp({ db, auth: betterAuthAuthenticator(limited), betterAuth: limited });
+    const attempt = (ip: string) => limitedApp.request('/api/auth/sign-in/email', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: BASE, 'x-forwarded-for': ip },
+      body: JSON.stringify({ email: 'alice@a.test', password: 'wrong-password-123' }),
+    });
+    for (let i = 0; i < 5; i++) expect((await attempt('203.0.113.77')).status).toBe(401);
+    expect((await attempt('203.0.113.77')).status).toBe(429);
+    expect((await attempt('203.0.113.78')).status).toBe(401);
+  });
+
   it('sign-up is disabled by default (allowSignUp false)', async () => {
     const closedAuth = createAuth(db, { secret: SECRET, baseURL: BASE, secureCookies: false });
     const closedApp = createApp({ db, auth: betterAuthAuthenticator(closedAuth), betterAuth: closedAuth });
