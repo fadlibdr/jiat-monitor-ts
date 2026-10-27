@@ -23,6 +23,8 @@ const Env = z.object({
   TELEGRAM_BOT_USERNAME: z.string().regex(/^[A-Za-z0-9_]{5,32}$/, 'TELEGRAM_BOT_USERNAME: 5–32 karakter A-Z a-z 0-9 _').optional(),
   /** folder of original intake photos (same as the worker's) */
   STORAGE_DIR: z.string().min(1).optional(),
+  /** the built browser UI (npm --prefix web run build), served under /app/; missing → API only */
+  WEB_DIST_DIR: z.string().min(1).default('web/dist'),
   NODE_ENV: z.string().default('development'),
 });
 
@@ -43,7 +45,7 @@ async function main(): Promise<void> {
   });
   const log = createLogger({ service: 'api' });
   const app = createApp({
-    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins, log,
+    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins, log, webDistDir: env.WEB_DIST_DIR,
     ...(env.STORAGE_DIR ? { storage: new LocalDiskStorage(env.STORAGE_DIR) } : {}),
     ...(env.TELEGRAM_WEBHOOK_SECRET ? { telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET } : {}),
     ...(env.TELEGRAM_BOT_USERNAME ? { telegramBotUsername: env.TELEGRAM_BOT_USERNAME } : {}),

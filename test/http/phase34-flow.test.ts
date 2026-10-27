@@ -191,16 +191,18 @@ describe('dashboards', () => {
     alerts: Array<{ kind: string }>;
   };
 
-  it('company dashboard is live; finance and money alerts only for finance and managers', async () => {
+  it('company dashboard is live, for finance and managers only (LLD §4: company_manager, finance)', async () => {
     const m = await ok<Panels>(call(mgr, 'GET', '/dashboard'));
     expect(m.summary.valueDppEffectiveCents).toBe(1_000_000_000 * RP);
     expect(m.summary.progress).toMatchObject({ period: '2026-09-01', plannedMicroPct: 40_000_000, actualMicroPct: 34_000_000 });
     expect(m.finance).toMatchObject({ receivableCents: 184_700_000 * RP, cash: { inCents: 100_000_000 * RP } });
     expect(m.procurement).toMatchObject({ poOutstandingCents: 4_500_000 * RP, poOverdueCount: 1 });
     expect(m.alerts.map((a) => a.kind).sort()).toEqual(['kontrak_mendekati_batas', 'po_lewat_30_hari', 'termin_jatuh_tempo']);
-    const s = await ok<Panels>(call(staff, 'GET', '/dashboard'));
-    expect(s.finance).toBeNull();
-    expect(s.alerts.map((a) => a.kind).sort()).toEqual(['kontrak_mendekati_batas', 'po_lewat_30_hari']);
+    const f = await ok<Panels>(call(fin, 'GET', '/dashboard'));
+    expect(f.finance).toMatchObject({ receivableCents: 184_700_000 * RP });
+    // site staff and project admins work in their own screens; the company's money is not theirs to see
+    expect((await call(staff, 'GET', '/dashboard')).status).toBe(403);
+    expect((await call(adm, 'GET', '/dashboard')).status).toBe(403);
   });
 
   it('holding refresh is rate-limited; the holding dashboard equals the company dashboard (reconciliation)', async () => {

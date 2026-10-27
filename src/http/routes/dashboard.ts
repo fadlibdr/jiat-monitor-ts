@@ -2,11 +2,10 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import { buildPanels } from '../../dashboard/panels.js';
 import { computeSnapshot } from '../../dashboard/snapshot.js';
-import type { AlertKind } from '../../db/schema.js';
 import { withCompany } from '../../db/tenant.js';
 import { wibMonth } from '../../domain/date.js';
 import { periodOf } from '../../domain/scurve.js';
-import { FINANCE_ROLES, IdParam, type App, type RouteDeps } from '../context.js';
+import { FINANCE_ROLES, IdParam, requireRole, type App, type RouteDeps } from '../context.js';
 
 /** "2026-10" or "2026-10-01" → "2026-10-01"; anything else is a 400. */
 export const Month = z.string().transform((raw, ctx) => {
@@ -31,27 +30,18 @@ export function parsePeriods(c: Context, today: Date) {
   return { ...q, period: q.period ?? wibMonth(today) };
 }
 
-/** Alerts that show money owed or owing: finance's and the managers' only, like the finance panel. */
-const MONEY_ALERTS: ReadonlySet<AlertKind> = new Set(['termin_jatuh_tempo', 'vendor_overdue']);
-
 /**
- * Company dashboard (LLD §8 "GET /dashboard/company"), live from the transaction tables inside the
- * caller's RLS and site scope, through the same aggregation the holding snapshot uses.
+ * Company dashboard (LLD §4 "GET /dashboard/company": company_manager, finance), live from the
+ * transaction tables inside the caller's RLS and site scope, through the same aggregation the
+ * holding snapshot uses. Its receivables, debts and cash are the company's money: other roles have
+ * their own screens (review, opname, PR/PO) and get 403 here.
  */
 export function registerDashboardRoutes(app: App, { db, now }: RouteDeps): void {
-  app.get('/companies/:companyId/dashboard', async (c) => {
+  app.get('/companies/:companyId/dashboard', requireRole(FINANCE_ROLES), async (c) => {
     const today = now();
     const f = parsePeriods(c, today);
     // one snapshot for the ~25 reads, so a termin issued or a payment recorded meanwhile is seen everywhere or nowhere
     const rows = await withCompany(db, c.get('tenant'), (tx) => computeSnapshot(tx, c.get('companyId'), today), { snapshot: true, readOnly: true });
-    const panels = buildPanels(rows, f, today);
-    const money = FINANCE_ROLES.includes(c.get('role'));
-    return c.json({
-      data: {
-        ...panels,
-        finance: money ? panels.finance : null,
-        alerts: money ? panels.alerts : panels.alerts.filter((a) => !MONEY_ALERTS.has(a.kind)),
-      },
-    });
+    return c.json({ data: buildPanels(rows, f, today) });
   });
 }

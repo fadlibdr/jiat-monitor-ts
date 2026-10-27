@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Authenticator } from '../auth/authenticator.js';
 import type { Auth } from '../auth/better-auth.js';
 import { BoqImportError } from '../boq/errors.js';
-import { companies, companyUsers } from '../db/schema.js';
+import { companies, companyUsers, managementViewers, users } from '../db/schema.js';
 import { AmountOutOfRange } from '../domain/contract.js';
 import { siteScopeFor, withApp, type Db } from '../db/tenant.js';
 import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps } from './context.js';
@@ -26,6 +26,7 @@ import type { ObjectStorage } from '../intake/storage.js';
 import { errorText } from '../jobs/queue.js';
 import type { Log } from '../log.js';
 import { createLinkCode } from '../ops/telegram-link.js';
+import { registerWeb } from './web.js';
 
 export { readUpload } from './context.js';
 
@@ -45,13 +46,15 @@ export interface AppDeps {
   log?: Log;
   /** TELEGRAM_BOT_USERNAME: makes POST /me/telegram-link return a t.me deep link */
   telegramBotUsername?: string;
+  /** web/dist: the browser UI served under /app/ (src/http/web.ts); absent → API only */
+  webDistDir?: string;
 }
 
 const MAX_UPLOAD = 15 * 1024 * 1024;
 
 export function createApp({
   db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date(), storage, telegramWebhookSecret,
-  log = () => {}, telegramBotUsername,
+  log = () => {}, telegramBotUsername, webDistDir,
 }: AppDeps) {
   const app = new Hono<AppEnv>();
   const deps: RouteDeps = { db, maxUploadBytes, now };
@@ -96,6 +99,9 @@ export function createApp({
 
   app.get('/health', (c) => c.json({ ok: true }));
 
+  // the browser UI (public files; every API call it makes goes through the gates below)
+  if (webDistDir && !registerWeb(app, webDistDir)) log('web_missing', { dir: webDistDir });
+
   // Telegram authenticates with its secret token, not a session (registered before the session gates)
   registerTelegramWebhook(app, { db, secret: telegramWebhookSecret, now });
 
@@ -105,7 +111,19 @@ export function createApp({
   }
 
   // --- authentication ---
-  for (const path of ['/me/*', '/companies', '/companies/*', '/holding/*', '/admin/*']) app.use(path, requireUser(auth, db));
+  for (const path of ['/me', '/me/*', '/companies', '/companies/*', '/holding/*', '/admin/*']) app.use(path, requireUser(auth, db));
+
+  /** Who is signed in, and whether the holding dashboard is theirs (the UI decides what to offer). */
+  app.get('/me', async (c) => {
+    const userId = c.get('userId');
+    const me = await withApp(db, async (tx) => {
+      const [u] = await tx.select({ id: users.id, name: users.name, email: users.email, isSystemAdmin: users.isSystemAdmin }).from(users).where(eq(users.id, userId));
+      const [viewer] = await tx.select({ userId: managementViewers.userId }).from(managementViewers).where(eq(managementViewers.userId, userId));
+      return u ? { ...u, holdingViewer: viewer !== undefined } : null;
+    });
+    if (!me) throw new HTTPException(401, { message: 'Belum masuk.' });
+    return c.json({ data: me });
+  });
 
   app.get('/me/companies', async (c) => {
     const userId = c.get('userId');
