@@ -145,6 +145,7 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | GET | `/health` | — |
 | POST | `/api/auth/sign-in/email` … | Better Auth |
 | GET | `/me/companies` | perusahaan + peran si pemanggil |
+| POST | `/me/telegram-link` | kode sekali pakai (15 menit) untuk menghubungkan akun Telegram: kirim `/start <kode>` ke bot, atau buka `link` (`https://t.me/<bot>?start=<kode>`, bila `TELEGRAM_BOT_USERNAME` diisi) |
 | GET/POST/DELETE | `/companies/:companyId/members[/:userId]` | `{email, role, siteIds?}`; upsert; `404` email belum terdaftar; `409` bila menghapus/menurunkan `company_manager` terakhir |
 | GET/POST | `/companies/:companyId/sites` · PATCH `…/sites/:siteId` | `409` kode ganda per perusahaan |
 | GET/POST | `/companies/:companyId/contracts` | nilai efektif (DPP + addendum), `valueTotalCents`, `endDateEffective`, `daysLeft` diturunkan; `404` site milik perusahaan lain |
@@ -152,7 +153,8 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | GET/PUT | `/companies/:companyId/contracts/:contractId/terms` | PUT mengganti seluruh jadwal; `400` Σ > 100 % / ambang progres menurun; `complete` bila Σ = 100 % |
 | GET/POST | `/companies/:companyId/contracts/:contractId/addendums` | `{number, signedAt, valueDeltaCents?, endDateNew?}`; `400` bila DPP efektif ≤ 0 |
 | POST | `/companies/:companyId/contracts/:contractId/boq/import?sheet=RAB` | multipart `file` (.xlsx ≤ 15 MB). `201` ringkasan; `422` `{error: total_mismatch\|sheet_missing\|…, details}`; tidak ada yang ditulis saat gagal |
-| GET | `/companies/:companyId/contracts/:contractId/boq` | versi `is_current` + item |
+| GET | `/companies/:companyId/contracts/:contractId/boq` | versi `is_current` + item (dengan kategori biaya: diwarisi per kode dari versi sebelumnya, lalu kata kunci, lalu seksi) |
+| PATCH | `/companies/:companyId/contracts/:contractId/boq/items/:itemId` | `{category}` item versi aktif; dipertahankan saat impor ulang |
 | GET | `/holding/companies` · `/holding/contracts` | hanya `management_viewers`; read-only; filter `companies[]`, `site_id`, `employer`, `status`; setiap request dicatat di `audit_logs` |
 | GET/POST/PATCH | `/admin/companies[/:companyId]` | admin sistem; `managerEmail` = `company_manager` pertama |
 | GET/POST/DELETE | `/admin/companies/:companyId/members[/:userId]` | sama seperti di atas, tanpa harus menjadi anggota |

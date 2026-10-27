@@ -82,7 +82,7 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
   - `companies.bank_name`, `bank_account`, `logo_path` (LLD §2; needed to print invoices)
   - `users.phone`
   - `created_by` / `updated_by` on every table (LLD §2)
-- [ ] **Link Telegram identities to users.** *(Partly done: `users.telegram_user_id` + `PATCH /admin/users/:id`; a self-service `/start <code>` flow is still open.)* LLD §7 ignores corrections from senders who are not members, but no table links a Telegram user id to `users`. Add `users.telegram_user_id` and a linking flow, for example `/start <one-time code>`. See §5.12.
+- [x] **Link Telegram identities to users.** *(Partly done: `users.telegram_user_id` + `PATCH /admin/users/:id`; a self-service `/start <code>` flow is still open.)* LLD §7 ignores corrections from senders who are not members, but no table links a Telegram user id to `users`. Add `users.telegram_user_id` and a linking flow, for example `/start <one-time code>`. See §5.12. — **Done:** self-service `POST /me/telegram-link` → one-time code (hashed, 15 min, single use) → "/start <code>" to the bot (or the t.me deep link); this also opens the private chat the DailyDigest needs.
 - [x] **Rate-limit sign-in** on `/api/auth/sign-in/email` (README #4). — **Done:** 5/min/IP + `AUTH_TRUSTED_PROXIES`.
 
 ### 4.2 Site & contract — M
@@ -95,7 +95,7 @@ Sizes are relative (S < M < L < XL), not weeks; see §7.
 ### 4.3 BOQ — M
 
 - [ ] **Fixture test with the real Keerom `versi_2_RAPI` workbook.** Assert item count, hierarchy, `SUM(amount) = value_dpp` and total weight = 100.00 (LLD §10, Phase 1 exit criterion).
-- [ ] **Populate `boq_items.category`** (material/upah/alat/subkon/…). The column exists, but the importer never sets it (`src/boq/importer.ts:92`). Cost-by-category and the mockup's "material 61 % · subkon 29 %" depend on it. Decide where it comes from: an AHSP column, a keyword rule, or a manual step after import.
+- [x] **Populate `boq_items.category`** (material/upah/alat/subkon/…). The column exists, but the importer never sets it (`src/boq/importer.ts:92`). Cost-by-category and the mockup's "material 61 % · subkon 29 %" depend on it. Decide where it comes from: an AHSP column, a keyword rule, or a manual step after import. — **Done as a heuristic, decision still open:** at import the category is kept from the previous version by code, else whole-word keywords of the item, else its section; correct per item with `PATCH …/boq/items/:itemId` (kept on re-import). An AHSP-based split would be more exact.
 - [x] **Import the planned schedule (rencana / time schedule) into `boq_schedules`.** The table exists, but nothing writes to it. Without it there is no planned S-curve and no deviation alert. — **Done** as an API (`PUT …/boq/schedule`, per code or contract-wide); reading it from the RAB workbook's time-schedule sheet is still open.
 - [x] **Define how BOQ versions interact with progress and procurement references** (§5.3). — **Done:** progress, plan and commitments are matched by BOQ **code** across versions; the plan comes from the newest version that has one.
 
