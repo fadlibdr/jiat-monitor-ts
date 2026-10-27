@@ -29,7 +29,25 @@ export interface EffectiveContract {
 
 /** PPN on a DPP, rounded half away from zero to the cent. */
 export function ppnOf(dppCents: Cents, ppnRateBp: number): Cents {
-  return roundDiv(dppCents * ppnRateBp, BP_100);
+  return mulDiv(dppCents, ppnRateBp, BP_100);
+}
+
+/**
+ * a × b / d rounded half away from zero, exact for any safe-integer inputs. Money × basis points
+ * leaves the safe range quickly (Rp 10 M-billion DPP = 1e12 cents × 10 000 bp > 2^53), so the
+ * product is taken in BigInt.
+ */
+export function mulDiv(a: number, b: number, d: number): number {
+  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || !Number.isSafeInteger(d) || d === 0) {
+    throw new RangeError(`mulDiv: argumen tidak valid (${a}, ${b}, ${d})`);
+  }
+  const p = BigInt(a) * BigInt(b);
+  const D = BigInt(d);
+  let q = p / D;
+  const r = p % D;
+  const twice = (r < 0n ? -r : r) * 2n;
+  if (twice >= (D < 0n ? -D : D)) q += (p < 0n) !== (D < 0n) ? -1n : 1n;
+  return Number(q);
 }
 
 export function effectiveContract(k: ContractBase, addendums: readonly AddendumLike[]): EffectiveContract {
