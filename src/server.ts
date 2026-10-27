@@ -4,6 +4,7 @@ import { betterAuthAuthenticator, createAuth } from './auth/better-auth.js';
 import { createDb, DatabaseUnavailable } from './db/client.js';
 import { createApp } from './http/app.js';
 import { LocalDiskStorage } from './intake/storage.js';
+import { createLogger } from './log.js';
 
 const Env = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL harus diisi (lihat .env.example).'),
@@ -38,15 +39,16 @@ async function main(): Promise<void> {
     ...(env.AUTH_RATE_LIMIT ? { rateLimit: env.AUTH_RATE_LIMIT === '1' } : {}),
     trustedProxies: env.AUTH_TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean),
   });
+  const log = createLogger({ service: 'api' });
   const app = createApp({
-    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins,
+    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins, log,
     ...(env.STORAGE_DIR ? { storage: new LocalDiskStorage(env.STORAGE_DIR) } : {}),
     ...(env.TELEGRAM_WEBHOOK_SECRET ? { telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET } : {}),
   });
-  const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => console.log(`JIAT Monitor API on :${info.port}`));
+  const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => log('api_started', { port: info.port }));
 
   const shutdown = (sig: string) => {
-    console.log(`${sig}: menutup server…`);
+    log('api_stopping', { signal: sig });
     server.close(() => void close().finally(() => process.exit(0)));
   };
   process.on('SIGINT', () => shutdown('SIGINT'));

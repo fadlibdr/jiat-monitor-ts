@@ -16,6 +16,7 @@ import { LocalDiskStorage } from './intake/storage.js';
 import { TelegramBotApi } from './intake/telegram-api.js';
 import { runWorker, type Registry } from './jobs/queue.js';
 import { runScheduler } from './jobs/schedule.js';
+import { createLogger } from './log.js';
 import { opsRegistry, opsSchedules } from './ops/registry.js';
 
 const Env = z.object({
@@ -35,9 +36,7 @@ const Env = z.object({
 });
 
 /** One JSON object per line, with company/chat/message ids and never photo bytes or account numbers (LLD §9). */
-function log(msg: string, meta: object = {}): void {
-  console.log(JSON.stringify({ time: new Date().toISOString(), level: msg.endsWith('failed') ? 'error' : 'info', msg, ...meta }));
-}
+const log = createLogger({ service: 'worker' });
 
 async function main(): Promise<void> {
   const env = Env.parse(process.env);

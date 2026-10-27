@@ -22,6 +22,8 @@ import { registerTelegramWebhook } from './routes/telegram.js';
 import { registerVendorRoutes } from './routes/vendors.js';
 import { MANAGE_ROLES, requireRole } from './context.js';
 import type { ObjectStorage } from '../intake/storage.js';
+import { errorText } from '../jobs/queue.js';
+import type { Log } from '../log.js';
 
 export { readUpload } from './context.js';
 
@@ -37,15 +39,29 @@ export interface AppDeps {
   storage?: ObjectStorage;
   /** TELEGRAM_WEBHOOK_SECRET; absent → the webhook route answers 404 */
   telegramWebhookSecret?: string;
+  /** structured log (src/log.ts); absent → silent (tests) */
+  log?: Log;
 }
 
 const MAX_UPLOAD = 15 * 1024 * 1024;
 
 export function createApp({
   db, auth, betterAuth, trustedOrigins = [], maxUploadBytes = MAX_UPLOAD, now = () => new Date(), storage, telegramWebhookSecret,
+  log = () => {},
 }: AppDeps) {
   const app = new Hono<AppEnv>();
   const deps: RouteDeps = { db, maxUploadBytes, now };
+
+  // one line per request: ids and timing only — no query string, body or headers (LLD §9)
+  app.use('*', async (c, next) => {
+    const started = performance.now();
+    await next();
+    if (c.req.path === '/health') return;
+    log('http_request', {
+      method: c.req.method, path: c.req.path, status: c.res.status, ms: Math.round(performance.now() - started),
+      userId: c.get('userId') ?? null, companyId: c.get('companyId') ?? null,
+    });
+  });
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
@@ -58,7 +74,8 @@ export function createApp({
       // RLS WITH CHECK: e.g. writing a row for a site outside the caller's scope
       case '42501': return c.json({ error: 'forbidden', message: 'Akses ditolak oleh kebijakan data.' }, 403);
     }
-    console.error('unhandled', err);
+    // errorText reports the database's reason, not the SQL and its bound parameters (row data)
+    log('unhandled', { method: c.req.method, path: c.req.path, userId: c.get('userId') ?? null, companyId: c.get('companyId') ?? null, error: errorText(err) });
     return c.json({ error: 'internal', message: 'Terjadi kesalahan pada server.' }, 500);
   });
 
