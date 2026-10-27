@@ -53,7 +53,8 @@ const SITE_SCOPE: Record<TenantTable, string | null> = {
   dash_progress: `jiat_site_allowed(site_id)`,
   dash_monthly: `jiat_site_allowed(site_id)`,
   dash_balances: `jiat_site_allowed(site_id)`,
-  dash_vendors: null,
+  dash_vendors: `jiat_site_allowed(site_id)`,
+  dash_alerts: `jiat_site_allowed(site_id)`,
   dash_refreshes: null,
 };
 

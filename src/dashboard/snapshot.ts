@@ -1,11 +1,11 @@
 import { and, eq, gte, inArray, ne, sql } from 'drizzle-orm';
-import { effectiveContract } from '../domain/contract.js';
+import { daysLeft, effectiveContract } from '../domain/contract.js';
 import { lineAmountCents, parseQty } from '../domain/quantity.js';
-import { MICRO_100 } from '../domain/scurve.js';
+import { progressAt } from '../domain/scurve.js';
 import {
-  companies, contractAddendums, contracts, contractTerms, dashBalances, dashContracts, dashMonthly, dashProgress, dashRefreshes, dashVendors,
-  goodsReceiptItems, goodsReceipts, intakeEvents, payments, purchaseOrderItems, purchaseOrders, purchaseRequests, salesInvoices,
-  sites, vendorInvoices, vendors,
+  companies, contractAddendums, contracts, contractTerms, dashAlerts, dashBalances, dashContracts, dashMonthly, dashProgress,
+  dashRefreshes, dashVendors, goodsReceiptItems, goodsReceipts, intakeEvents, payments, purchaseOrderItems, purchaseOrders,
+  purchaseRequests, salesInvoices, sites, vendorInvoices, vendors,
 } from '../db/schema.js';
 import { withApp, withCompany, type Db, type Tx } from '../db/tenant.js';
 import { payables, receivables } from '../finance/service.js';
@@ -14,58 +14,88 @@ import { commitments } from '../procurement/service.js';
 import { sCurveMicro } from '../progress/service.js';
 
 /**
- * Dashboard numbers for one company (LLD §8 panels), computed from the transaction tables with the
- * same functions the detail endpoints use. `computeSnapshot` serves the company dashboard live
- * (inside the caller's RLS/site scope); `refreshCompany` stores it for the holding dashboard.
+ * Dashboard numbers of one company (LLD §8), computed from the transaction tables with the same
+ * functions the detail endpoints use. `computeSnapshot` serves the company dashboard live (inside
+ * the caller's RLS and site scope); `refreshCompany` stores it for the holding dashboard.
  */
-export type Snapshot = Awaited<ReturnType<typeof computeSnapshot>>;
+export interface SnapshotRows {
+  contracts: Array<typeof dashContracts.$inferSelect>;
+  progress: Array<typeof dashProgress.$inferSelect>;
+  monthly: Array<typeof dashMonthly.$inferSelect>;
+  balances: Array<typeof dashBalances.$inferSelect>;
+  vendors: Array<typeof dashVendors.$inferSelect>;
+  alerts: Array<typeof dashAlerts.$inferSelect>;
+}
+
+/** AlertService thresholds (LLD §8). */
+export const ALERT_RULES = {
+  terminDueWithinDays: 14,
+  poOlderThanDays: 30,
+  /** deviation below −10 percentage points */
+  deviationBelowMicroPct: -10_000_000,
+  contractDaysLeftAtMost: 30,
+  contractProgressBelowMicroPct: 95_000_000,
+} as const;
 
 const MICRO_PER_BP = 10_000;
 const DAY = 86_400_000;
-const PO_OVERDUE_DAYS = 30;
 const INTAKE_WINDOW_DAYS = 7;
 /** pg_advisory_xact_lock(key1, company_id) namespace of snapshot refreshes */
 const DASH_LOCK = 4101;
 
-const month = (iso: string) => `${iso.slice(0, 7)}-01`;
+const monthOf = (iso: string) => `${iso.slice(0, 7)}-01`;
+const ageDays = (iso: string, now: Date) => -(daysLeft(iso, now) ?? 0);
 
-export async function computeSnapshot(tx: Tx, companyId: number, now: Date) {
-  const refreshedAt = now;
-  const today = now.toISOString().slice(0, 10);
-  const currentPeriod = month(today);
+export async function computeSnapshot(tx: Tx, companyId: number, now: Date): Promise<SnapshotRows> {
+  const currentPeriod = monthOf(now.toISOString().slice(0, 10));
+  const alerts: SnapshotRows['alerts'] = [];
+  const alert = (kind: SnapshotRows['alerts'][number]['kind'], ref: string, siteId: number, data: Record<string, string | number | null>) =>
+    alerts.push({ companyId, kind, ref, siteId, data });
 
-  // --- contracts, progress, commitment ---
+  // --- contracts: value, termin, progress curve, commitment ---
   const ks = await tx.select().from(contracts);
   const adds = await tx.select().from(contractAddendums);
   const terms = await tx.select().from(contractTerms);
-  const liveInv = await tx.select({ contractId: salesInvoices.contractId, termId: salesInvoices.termId }).from(salesInvoices).where(ne(salesInvoices.status, 'cancelled'));
-  const contractRows: Array<typeof dashContracts.$inferInsert> = [];
-  const progressRows: Array<typeof dashProgress.$inferInsert> = [];
+  const invs = await tx.select().from(salesInvoices).where(ne(salesInvoices.status, 'cancelled'));
+  const contractRows: SnapshotRows['contracts'] = [];
+  const progressRows: SnapshotRows['progress'] = [];
   for (const k of ks) {
     const e = effectiveContract(k, adds.filter((a) => a.contractId === k.id));
     const curve = await sCurveMicro(tx, k.id);
-    const latestActual = [...curve].reverse().find((p) => p.actualMicroPct !== null)?.actualMicroPct ?? null;
-    const planNow = [...curve].reverse().find((p) => p.period <= currentPeriod)?.plannedMicroPct ?? null;
-    const kTerms = terms.filter((t) => t.contractId === k.id);
-    const invoiced = new Set(liveInv.filter((i) => i.contractId === k.id).map((i) => i.termId));
-    const c = await commitments(tx, k.id);
+    const latestActual = curve.filter((p) => p.actualMicroPct !== null).at(-1)?.actualMicroPct ?? 0;
+    const kTerms = terms.filter((t) => t.contractId === k.id).sort((a, b) => a.seq - b.seq);
+    const invoiced = new Set(invs.filter((i) => i.contractId === k.id).map((i) => i.termId));
+    const reached = (t: (typeof kTerms)[number]) => latestActual >= t.triggerProgressBp * MICRO_PER_BP;
+    const { total, byCategory } = await commitments(tx, k.id);
     contractRows.push({
       contractId: k.id, companyId, siteId: k.siteId, number: k.number, employerName: k.employerName, status: k.status,
       valueDppCents: k.valueDppCents, addendumDeltaCents: e.addendumDeltaCents, valueDppEffectiveCents: e.valueDppEffectiveCents,
       valueTotalCents: e.valueTotalCents, endDateEffective: e.endDateEffective,
-      termsTotal: kTerms.length, termsIssued: invoiced.size,
-      termsReady: kTerms.filter((t) => !invoiced.has(t.id) && (latestActual ?? 0) >= t.triggerProgressBp * MICRO_PER_BP).length,
-      plannedMicroPct: planNow, actualMicroPct: latestActual,
-      commitment: { total: c.total, byCategory: c.byCategory },
-      refreshedAt,
+      termsTotal: kTerms.length, termsIssued: invoiced.size, termsReady: kTerms.filter((t) => !invoiced.has(t.id) && reached(t)).length,
+      commitment: { total, byCategory },
     });
     for (const p of curve) {
       progressRows.push({ contractId: k.id, period: p.period, companyId, siteId: k.siteId, plannedMicroPct: p.plannedMicroPct, actualMicroPct: p.actualMicroPct, deviationMicroPct: p.deviationMicroPct });
     }
+
+    if (k.status !== 'active') continue;
+    // termin are billed in order, so only the first open one can be "ready"
+    const next = kTerms.find((t) => !invoiced.has(t.id));
+    if (next && reached(next)) {
+      alert('termin_siap', `contract:${k.id}`, k.siteId, { contractId: k.id, contractNumber: k.number, termSeq: next.seq, triggerBp: next.triggerProgressBp, actualMicroPct: latestActual });
+    }
+    const p = progressAt(curve, currentPeriod);
+    if (p?.deviationMicroPct != null && p.deviationMicroPct < ALERT_RULES.deviationBelowMicroPct) {
+      alert('deviasi_progres', `contract:${k.id}`, k.siteId, { contractId: k.id, contractNumber: k.number, period: p.period, plannedMicroPct: p.plannedMicroPct, actualMicroPct: p.actualMicroPct, deviationMicroPct: p.deviationMicroPct });
+    }
+    const left = daysLeft(e.endDateEffective, now);
+    if (left !== null && left <= ALERT_RULES.contractDaysLeftAtMost && latestActual < ALERT_RULES.contractProgressBelowMicroPct) {
+      alert('kontrak_mendekati_batas', `contract:${k.id}`, k.siteId, { contractId: k.id, contractNumber: k.number, endDate: e.endDateEffective, daysLeft: left, actualMicroPct: latestActual });
+    }
   }
 
   // --- money per site × month ---
-  const monthly = new Map<string, typeof dashMonthly.$inferInsert>();
+  const monthly = new Map<string, SnapshotRows['monthly'][number]>();
   const bucket = (siteId: number, period: string) => {
     const key = `${siteId}|${period}`;
     let m = monthly.get(key);
@@ -76,38 +106,40 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date) {
     return m;
   };
   const pos = await tx.select().from(purchaseOrders).where(inArray(purchaseOrders.status, ['issued', 'partial', 'received']));
-  for (const po of pos) bucket(po.siteId, month(po.orderDate)).poIssuedCents! += po.dppCents;
+  for (const po of pos) bucket(po.siteId, monthOf(po.orderDate)).poIssuedCents += po.dppCents;
   const poLines = pos.length ? await tx.select().from(purchaseOrderItems).where(inArray(purchaseOrderItems.poId, pos.map((p) => p.id))) : [];
+  const lineById = new Map(poLines.map((l) => [l.id, l]));
   const grRows = await tx.select({ siteId: goodsReceipts.siteId, receivedAt: goodsReceipts.receivedAt, poItemId: goodsReceiptItems.poItemId, qty: goodsReceiptItems.qtyReceived })
     .from(goodsReceiptItems).innerJoin(goodsReceipts, eq(goodsReceipts.id, goodsReceiptItems.grId));
   const receivedByLine = new Map<number, number>();
   for (const g of grRows) {
-    const line = poLines.find((l) => l.id === g.poItemId);
     const q = parseQty(g.qty) ?? 0;
     receivedByLine.set(g.poItemId, (receivedByLine.get(g.poItemId) ?? 0) + q);
-    if (line) bucket(g.siteId, month(g.receivedAt)).grReceivedCents! += lineAmountCents(q, line.unitPriceCents);
+    const line = lineById.get(g.poItemId);
+    if (line) bucket(g.siteId, monthOf(g.receivedAt)).grReceivedCents += lineAmountCents(q, line.unitPriceCents);
   }
-  const invs = await tx.select().from(salesInvoices).where(ne(salesInvoices.status, 'cancelled'));
+  const undeliveredOf = (poId: number) => poLines.filter((l) => l.poId === poId)
+    .reduce((s, l) => s + lineAmountCents(Math.max(0, (parseQty(l.qty) ?? 0) - (receivedByLine.get(l.id) ?? 0)), l.unitPriceCents), 0);
   for (const i of invs) {
-    const m = bucket(i.siteId, month(i.invoiceDate));
-    m.invoicedDppCents! += i.dppCents;
-    m.invoicedTotalCents! += i.totalCents;
+    const m = bucket(i.siteId, monthOf(i.invoiceDate));
+    m.invoicedDppCents += i.dppCents;
+    m.invoicedTotalCents += i.totalCents;
   }
   for (const p of await tx.select().from(payments)) {
-    const m = bucket(p.siteId, month(p.paidAt));
-    if (p.payableType === 'sales_invoices') m.cashInCents! += p.amountCents;
-    else m.cashOutCents! += p.amountCents;
+    const m = bucket(p.siteId, monthOf(p.paidAt));
+    if (p.payableType === 'sales_invoices') m.cashInCents += p.amountCents;
+    else m.cashOutCents += p.amountCents;
   }
-  const confirmed = await tx.select().from(vendorInvoices).where(eq(vendorInvoices.status, 'terkonfirmasi'));
-  for (const v of confirmed) {
-    const m = bucket(v.siteId, month(v.invoiceDate ?? v.createdAt.toISOString().slice(0, 10)));
+  // realised cost = confirmed vendor invoices, DPP (the BOQ budget is DPP too)
+  for (const v of await tx.select().from(vendorInvoices).where(eq(vendorInvoices.status, 'terkonfirmasi'))) {
+    const m = bucket(v.siteId, monthOf(v.invoiceDate ?? v.createdAt.toISOString().slice(0, 10)));
     const cat = v.category ?? 'tanpa_kategori';
-    const cost = m.costByCategory as Record<string, number>;
-    cost[cat] = (cost[cat] ?? 0) + (v.dppCents ?? v.totalCents);
+    const dpp = v.dppCents ?? (v.ppnCents !== null ? v.totalCents - v.ppnCents : v.totalCents);
+    m.costByCategory[cat] = (m.costByCategory[cat] ?? 0) + dpp;
   }
 
-  // --- balances per site (as of now) ---
-  const siteRows = await tx.select({ id: sites.id }).from(sites);
+  // --- balances per site, as of now ---
+  const siteIds = (await tx.select({ id: sites.id }).from(sites)).map((s) => s.id);
   const recv = await receivables(tx, now);
   const pay = await payables(tx, now);
   const prs = await tx.select({ siteId: purchaseRequests.siteId, status: purchaseRequests.status }).from(purchaseRequests)
@@ -115,85 +147,123 @@ export async function computeSnapshot(tx: Tx, companyId: number, now: Date) {
   const since = new Date(now.getTime() - INTAKE_WINDOW_DAYS * DAY);
   const photos = await tx.select({ siteId: intakeEvents.siteId, outcome: intakeEvents.outcome }).from(intakeEvents)
     .where(and(eq(intakeEvents.kind, 'photo'), gte(intakeEvents.createdAt, since)));
-  const recentRows = await tx.select({ siteId: vendorInvoices.siteId, confidence: vendorInvoices.confidence, status: vendorInvoices.status, createdAt: vendorInvoices.createdAt, confirmedAt: vendorInvoices.confirmedAt })
-    .from(vendorInvoices).where(and(eq(vendorInvoices.source, 'telegram'), gte(vendorInvoices.createdAt, since)));
+  const recentRows = await tx.select({ siteId: vendorInvoices.siteId, confidence: vendorInvoices.confidence }).from(vendorInvoices)
+    .where(and(eq(vendorInvoices.source, 'telegram'), gte(vendorInvoices.createdAt, since)));
   const open = await tx.select({ siteId: vendorInvoices.siteId, status: vendorInvoices.status }).from(vendorInvoices)
     .where(inArray(vendorInvoices.status, ['perlu_konfirmasi', 'perlu_cek']));
-  const confirmedRecently = await tx.select({ siteId: vendorInvoices.siteId, createdAt: vendorInvoices.createdAt, confirmedAt: vendorInvoices.confirmedAt })
-    .from(vendorInvoices).where(and(eq(vendorInvoices.status, 'terkonfirmasi'), gte(vendorInvoices.confirmedAt, since)));
+  const confirmed7d = await tx.select({ siteId: vendorInvoices.siteId, createdAt: vendorInvoices.createdAt, confirmedAt: vendorInvoices.confirmedAt })
+    .from(vendorInvoices).where(and(eq(vendorInvoices.status, 'terkonfirmasi'), eq(vendorInvoices.source, 'telegram'), gte(vendorInvoices.confirmedAt, since)));
+  const openPos = pos.filter((po) => po.status === 'issued' || po.status === 'partial');
+  const reviewFlags: readonly string[] = REVIEW_FLAGS;
 
-  const balanceRows: Array<typeof dashBalances.$inferInsert> = siteRows.map(({ id: siteId }) => {
+  const balanceRows: SnapshotRows['balances'] = siteIds.map((siteId) => {
     const r = recv.filter((x) => x.siteId === siteId);
-    const sum = (b: string) => r.filter((x) => x.bucket === b).reduce((s, x) => s + x.balanceCents, 0);
+    const aging = (b: string) => r.filter((x) => x.bucket === b).reduce((s, x) => s + x.balanceCents, 0);
     const p = pay.filter((x) => x.siteId === siteId);
-    const sitePos = pos.filter((po) => po.siteId === siteId && (po.status === 'issued' || po.status === 'partial'));
-    const outstanding = sitePos.reduce((s, po) => s + poLines.filter((l) => l.poId === po.id)
-      .reduce((t, l) => t + lineAmountCents(Math.max(0, (parseQty(l.qty) ?? 0) - (receivedByLine.get(l.id) ?? 0)), l.unitPriceCents), 0), 0);
+    const sitePos = openPos.filter((po) => po.siteId === siteId);
     const sitePhotos = photos.filter((x) => x.siteId === siteId);
-    // "ask" = the bot had to ask a person: a re-send request, or a saved row that needed checking
-    const asked = sitePhotos.filter((x) => x.outcome === 'tidak_terbaca').length
-      + recentRows.filter((x) => x.siteId === siteId && (x.confidence.flags ?? []).some((f) => (REVIEW_FLAGS as readonly string[]).includes(f))).length;
-    const minutes = confirmedRecently.filter((x) => x.siteId === siteId && x.confirmedAt)
-      .map((x) => Math.round((x.confirmedAt!.getTime() - x.createdAt.getTime()) / 60_000)).sort((a, b) => a - b);
     return {
       companyId, siteId,
-      receivable0to30Cents: sum('d0_30'), receivable31to60Cents: sum('d31_60'), receivable61to90Cents: sum('d61_90'), receivable90pCents: sum('d90p'),
+      receivable0to30Cents: aging('d0_30'), receivable31to60Cents: aging('d31_60'), receivable61to90Cents: aging('d61_90'), receivable90pCents: aging('d90p'),
+      receivableCount: r.length,
       payableTotalCents: p.reduce((s, x) => s + x.balanceCents, 0),
       payableOverdueCents: p.filter((x) => x.overdue).reduce((s, x) => s + x.balanceCents, 0),
       prOpen: prs.filter((x) => x.siteId === siteId).length,
       prWaiting: prs.filter((x) => x.siteId === siteId && x.status === 'submitted').length,
-      poOutstandingCents: outstanding,
-      poOverdueCount: sitePos.filter((po) => now.getTime() - new Date(`${po.orderDate}T00:00:00Z`).getTime() > PO_OVERDUE_DAYS * DAY).length,
+      poOutstandingCents: sitePos.reduce((s, po) => s + undeliveredOf(po.id), 0),
+      poOverdueCount: sitePos.filter((po) => ageDays(po.orderDate, now) > ALERT_RULES.poOlderThanDays).length,
       photos7d: sitePhotos.length,
-      asked7d: asked,
+      // "ask" (§5.4): the bot had to ask a person — a re-send request, or a saved row that needs checking
+      asked7d: sitePhotos.filter((x) => x.outcome === 'tidak_terbaca').length
+        + recentRows.filter((x) => x.siteId === siteId && (x.confidence.flags ?? []).some((f) => reviewFlags.includes(f))).length,
       openKonfirmasi: open.filter((x) => x.siteId === siteId && x.status === 'perlu_konfirmasi').length,
       openCek: open.filter((x) => x.siteId === siteId && x.status === 'perlu_cek').length,
-      medianConfirmMinutes7d: minutes.length ? minutes[Math.floor((minutes.length - 1) / 2)]! : null,
-      refreshedAt,
+      confirmMinutes7d: confirmed7d.filter((x) => x.siteId === siteId && x.confirmedAt)
+        .map((x) => Math.max(0, Math.round((x.confirmedAt!.getTime() - x.createdAt.getTime()) / 60_000))).sort((a, b) => a - b),
     };
   });
 
-  // --- vendors by committed value ---
-  const vendorRows = await tx.select({ id: vendors.id, name: vendors.name }).from(vendors);
-  const vendorAgg = vendorRows.map((v) => {
-    const vPos = pos.filter((po) => po.vendorId === v.id);
-    const undelivered = vPos.filter((po) => po.status !== 'received').reduce((s, po) => s + poLines.filter((l) => l.poId === po.id)
-      .reduce((t, l) => t + lineAmountCents(Math.max(0, (parseQty(l.qty) ?? 0) - (receivedByLine.get(l.id) ?? 0)), l.unitPriceCents), 0), 0);
-    return { companyId, vendorId: v.id, vendorName: v.name, poValueCents: vPos.reduce((s, po) => s + po.dppCents, 0), undeliveredCents: undelivered };
-  }).filter((v) => v.poValueCents > 0);
+  // --- vendors: committed value per vendor × site ---
+  const vendorName = new Map((await tx.select({ id: vendors.id, name: vendors.name }).from(vendors)).map((v) => [v.id, v.name]));
+  const vendorAgg = new Map<string, SnapshotRows['vendors'][number]>();
+  for (const po of pos) {
+    const key = `${po.vendorId}|${po.siteId}`;
+    const v = vendorAgg.get(key) ?? { companyId, siteId: po.siteId, vendorId: po.vendorId, vendorName: vendorName.get(po.vendorId) ?? '', poValueCents: 0, undeliveredCents: 0 };
+    v.poValueCents += po.dppCents;
+    if (po.status !== 'received') v.undeliveredCents += undeliveredOf(po.id);
+    vendorAgg.set(key, v);
+  }
 
-  return { contracts: contractRows, progress: progressRows, monthly: [...monthly.values()], balances: balanceRows, vendors: vendorAgg, refreshedAt };
+  // --- alerts on documents ---
+  const termById = new Map(terms.map((t) => [t.id, t]));
+  const contractById = new Map(ks.map((k) => [k.id, k]));
+  const invById = new Map(invs.map((i) => [i.id, i]));
+  for (const r of recv) {
+    const left = daysLeft(r.dueDate, now) ?? 0;
+    if (left > ALERT_RULES.terminDueWithinDays) continue;
+    alert('termin_jatuh_tempo', `invoice:${r.id}`, r.siteId, {
+      contractId: r.contractId, contractNumber: contractById.get(r.contractId)?.number ?? null, invoiceId: r.id, invoiceNumber: r.number,
+      termSeq: termById.get(invById.get(r.id)?.termId ?? 0)?.seq ?? null, dueDate: r.dueDate, daysLeft: left, balanceCents: r.balanceCents,
+    });
+  }
+  const overdue = new Map<string, { vendorId: number | null; vendorName: string | null; siteId: number; cents: number; invoices: number; maxDays: number }>();
+  for (const p of pay) {
+    if (!p.overdue || p.dueDate === null) continue;
+    // a vendor without a master row (draft name only) is grouped by its id-less name
+    const key = `${p.vendorId ?? `?${(p.vendorName ?? '').slice(0, 40)}`}:site:${p.siteId}`;
+    const o = overdue.get(key) ?? { vendorId: p.vendorId, vendorName: p.vendorName, siteId: p.siteId, cents: 0, invoices: 0, maxDays: 0 };
+    o.cents += p.balanceCents;
+    o.invoices += 1;
+    o.maxDays = Math.max(o.maxDays, ageDays(p.dueDate, now));
+    overdue.set(key, o);
+  }
+  for (const [key, o] of overdue) {
+    alert('vendor_overdue', `vendor:${key}`, o.siteId, { vendorId: o.vendorId, vendorName: o.vendorName, overdueCents: o.cents, invoices: o.invoices, maxDaysOverdue: o.maxDays });
+  }
+  for (const po of openPos) {
+    const age = ageDays(po.orderDate, now);
+    if (age <= ALERT_RULES.poOlderThanDays) continue;
+    alert('po_lewat_30_hari', `po:${po.id}`, po.siteId, {
+      poId: po.id, poNumber: po.number, vendorName: vendorName.get(po.vendorId) ?? null,
+      firstItem: poLines.find((l) => l.poId === po.id)?.description.slice(0, 200) ?? null, ageDays: age, outstandingCents: undeliveredOf(po.id),
+    });
+  }
+
+  return { contracts: contractRows, progress: progressRows, monthly: [...monthly.values()], balances: balanceRows, vendors: [...vendorAgg.values()], alerts };
 }
 
 /** Replaces a company's snapshot in one transaction: readers see the old or the new, never a mix. */
 export async function refreshCompany(db: Db, companyId: number, now: Date): Promise<void> {
   await withCompany(db, companyId, async (tx) => {
-    // two refreshes of one company (job + POST /holding/refresh) run one after the other, not interleaved
+    // two refreshes of one company (scheduled job + POST /holding/refresh) run one after the other
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${DASH_LOCK}, ${companyId}::int)`);
     const s = await computeSnapshot(tx, companyId, now);
-    await tx.delete(dashProgress);
-    await tx.delete(dashContracts);
-    await tx.delete(dashMonthly);
-    await tx.delete(dashBalances);
-    await tx.delete(dashVendors);
+    for (const t of [dashProgress, dashContracts, dashMonthly, dashBalances, dashVendors, dashAlerts]) await tx.delete(t);
     if (s.contracts.length) await tx.insert(dashContracts).values(s.contracts);
     if (s.progress.length) await tx.insert(dashProgress).values(s.progress);
     if (s.monthly.length) await tx.insert(dashMonthly).values(s.monthly);
     if (s.balances.length) await tx.insert(dashBalances).values(s.balances);
     if (s.vendors.length) await tx.insert(dashVendors).values(s.vendors);
+    if (s.alerts.length) await tx.insert(dashAlerts).values(s.alerts);
     await tx.insert(dashRefreshes).values({ companyId, refreshedAt: now })
       .onConflictDoUpdate({ target: dashRefreshes.companyId, set: { refreshedAt: now } });
   });
 }
 
-/** RefreshDashboards (LLD §9 "tiap 15 menit"): every company, each in its own transaction. */
+/**
+ * RefreshDashboards (LLD §9, every 15 minutes): every company, each in its own transaction. One
+ * company failing does not stop the others; the failures are reported together at the end.
+ */
 export async function refreshAll(db: Db, now: Date): Promise<{ companies: number }> {
   const ids = await withApp(db, (tx) => tx.select({ id: companies.id }).from(companies));
-  for (const { id } of ids) await refreshCompany(db, id, now);
+  const failures: Error[] = [];
+  for (const { id } of ids) {
+    try {
+      await refreshCompany(db, id, now);
+    } catch (err) {
+      failures.push(new Error(`company ${id}`, { cause: err }));
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, `dashboard refresh failed for ${failures.length} of ${ids.length} companies`);
   return { companies: ids.length };
-}
-
-/** Completion of a weighted progress, for labels like "41,2 %". */
-export function microToPctLabel(micro: number | null): string {
-  return micro === null ? '—' : `${(micro / (MICRO_100 / 100)).toFixed(1).replace('.', ',')}%`;
 }

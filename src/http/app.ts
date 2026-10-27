@@ -11,6 +11,8 @@ import { siteScopeFor, withApp, type Db } from '../db/tenant.js';
 import { CompanyParams, requireHolding, requireUser, type AppEnv, type RouteDeps } from './context.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCompanyRoutes } from './routes/company.js';
+import { registerDashboardRoutes } from './routes/dashboard.js';
+import { registerFinanceRoutes } from './routes/finance.js';
 import { registerHoldingRoutes } from './routes/holding.js';
 import { registerIntakeRoutes } from './routes/intake.js';
 import { registerMemberRoutes } from './routes/members.js';
@@ -108,6 +110,8 @@ export function createApp({
   registerIntakeRoutes(app, deps, storage);
   registerProcurementRoutes(app, deps);
   registerProgressRoutes(app, deps);
+  registerFinanceRoutes(app, deps);
+  registerDashboardRoutes(app, deps);
 
   return app;
 }

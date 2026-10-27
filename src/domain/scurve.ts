@@ -96,6 +96,20 @@ export function combineCurves(curves: ReadonlyArray<{ weightCents: number; point
   });
 }
 
+/**
+ * What a dashboard shows "as of" `period`: the latest month ≤ period that has an approved actual,
+ * compared with the plan OF THAT MONTH (not this month's plan against last month's actual, which
+ * would show an artificial lag every month until the opname is approved). Without any actual yet:
+ * the plan at `period` and no actual. Null when the curve has nothing up to `period`.
+ */
+export function progressAt(points: readonly SCurvePoint[], period: string): SCurvePoint | null {
+  const upTo = points.filter((p) => p.period <= period);
+  const reported = upTo.filter((p) => p.actualMicroPct !== null).at(-1);
+  if (reported) return reported;
+  const last = upTo.at(-1);
+  return last ? { period: last.period, plannedMicroPct: last.plannedMicroPct, actualMicroPct: null, deviationMicroPct: null } : null;
+}
+
 /** "2026-10" / "2026-10-15" → "2026-10-01"; null if not a valid month. */
 export function periodOf(raw: string): string | null {
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(raw);

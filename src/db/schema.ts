@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint, bigserial, boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, uuid, varchar,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { CATEGORIES } from '../domain/categories.js';
 
@@ -357,6 +358,9 @@ export const vendorInvoices = pgTable('vendor_invoices', {
   confidence: jsonb('confidence').$type<IntakeReview>().notNull().default(sql`'{}'::jsonb`),
   confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
   confirmedBy: bigint('confirmed_by', { mode: 'number' }),
+  /** the PO (and goods receipt) this invoice bills: three-way match, set on the review screen (HLD §9 Phase 3) */
+  poId: bigint('po_id', { mode: 'number' }).references((): AnyPgColumn => purchaseOrders.id),
+  grId: bigint('gr_id', { mode: 'number' }).references((): AnyPgColumn => goodsReceipts.id),
   ...authorship,
   ...timestamps,
 }, (t) => [
@@ -591,15 +595,12 @@ export const dashContracts = pgTable('dash_contracts', {
   termsIssued: integer('terms_issued').notNull(),
   /** termin whose progress trigger is reached but not yet invoiced */
   termsReady: integer('terms_ready').notNull(),
-  plannedMicroPct: bigint('planned_micro_pct', { mode: 'number' }),
-  actualMicroPct: bigint('actual_micro_pct', { mode: 'number' }),
   /** BOQ budget vs PO commitment vs received, total and per category (mockup "Komitmen vs BOQ") */
-  commitment: jsonb('commitment').$type<DashCommitment>().notNull().default(sql`'{}'::jsonb`),
-  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull(),
+  commitment: jsonb('commitment').$type<DashCommitment>().notNull(),
 }, (t) => [index('dash_contracts_company').on(t.companyId)]);
 
 export interface DashMoney { budgetCents: number; committedCents: number; receivedCents: number }
-export interface DashCommitment { total?: DashMoney; byCategory?: Record<string, DashMoney> }
+export interface DashCommitment { total: DashMoney; byCategory: Record<string, DashMoney> }
 
 export const dashProgress = pgTable('dash_progress', {
   contractId: bigint('contract_id', { mode: 'number' }).notNull().references(() => contracts.id),
@@ -636,6 +637,8 @@ export const dashBalances = pgTable('dash_balances', {
   receivable90pCents: bigint('receivable_90p_cents', { mode: 'number' }).notNull().default(0),
   payableTotalCents: bigint('payable_total_cents', { mode: 'number' }).notNull().default(0),
   payableOverdueCents: bigint('payable_overdue_cents', { mode: 'number' }).notNull().default(0),
+  /** sales invoices with an open balance */
+  receivableCount: integer('receivable_count').notNull().default(0),
   prOpen: integer('pr_open').notNull().default(0),
   prWaiting: integer('pr_waiting').notNull().default(0),
   poOutstandingCents: bigint('po_outstanding_cents', { mode: 'number' }).notNull().default(0),
@@ -644,18 +647,34 @@ export const dashBalances = pgTable('dash_balances', {
   asked7d: integer('asked_7d').notNull().default(0),
   openKonfirmasi: integer('open_konfirmasi').notNull().default(0),
   openCek: integer('open_cek').notNull().default(0),
-  medianConfirmMinutes7d: integer('median_confirm_minutes_7d'),
-  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull(),
+  /**
+   * Minutes from saved to confirmed, one entry per row confirmed in the last 7 days. Stored raw so
+   * the median over several sites or companies is exact (a median of medians is not a median).
+   */
+  confirmMinutes7d: jsonb('confirm_minutes_7d').$type<number[]>().notNull().default(sql`'[]'::jsonb`),
 }, (t) => [primaryKey({ columns: [t.companyId, t.siteId] })]);
 
-/** Top vendors per company by committed PO value, with what is not yet delivered. */
+/** Committed PO value per vendor and site, with what is not yet delivered ("Vendor terbesar"). */
 export const dashVendors = pgTable('dash_vendors', {
   companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
   vendorId: bigint('vendor_id', { mode: 'number' }).notNull().references(() => vendors.id),
   vendorName: text('vendor_name').notNull(),
   poValueCents: bigint('po_value_cents', { mode: 'number' }).notNull(),
   undeliveredCents: bigint('undelivered_cents', { mode: 'number' }).notNull(),
-}, (t) => [primaryKey({ columns: [t.companyId, t.vendorId] })]);
+}, (t) => [primaryKey({ columns: [t.companyId, t.siteId, t.vendorId] })]);
+
+/** AlertService (LLD §8), evaluated at refresh time from the same numbers the panels show. */
+export const ALERT_KINDS = ['termin_jatuh_tempo', 'termin_siap', 'vendor_overdue', 'deviasi_progres', 'po_lewat_30_hari', 'kontrak_mendekati_batas'] as const;
+export type AlertKind = (typeof ALERT_KINDS)[number];
+export const dashAlerts = pgTable('dash_alerts', {
+  companyId: bigint('company_id', { mode: 'number' }).notNull().references(() => companies.id),
+  kind: varchar('kind', { length: 30 }).notNull().$type<AlertKind>(),
+  /** what the alert is about, unique per kind: "contract:12", "po:7", "vendor:3:site:2", … */
+  ref: varchar('ref', { length: 80 }).notNull(),
+  siteId: bigint('site_id', { mode: 'number' }).notNull().references(() => sites.id),
+  data: jsonb('data').$type<Record<string, string | number | null>>().notNull(),
+}, (t) => [primaryKey({ columns: [t.companyId, t.kind, t.ref] })]);
 
 /** When each company's snapshot was last rebuilt ("data per HH:MM"; POST /holding/refresh guard). */
 export const dashRefreshes = pgTable('dash_refreshes', {
@@ -714,5 +733,5 @@ export const TENANT_TABLES = [
   'vendors', 'intake_events', 'attachments', 'vendor_invoices',
   'document_sequences', 'purchase_requests', 'purchase_request_items', 'purchase_orders', 'purchase_order_items',
   'goods_receipts', 'goods_receipt_items', 'progress_reports', 'progress_items',
-  'sales_invoices', 'payments', 'dash_contracts', 'dash_progress', 'dash_monthly', 'dash_balances', 'dash_vendors', 'dash_refreshes',
+  'sales_invoices', 'payments', 'dash_contracts', 'dash_progress', 'dash_monthly', 'dash_balances', 'dash_vendors', 'dash_alerts', 'dash_refreshes',
 ] as const;
