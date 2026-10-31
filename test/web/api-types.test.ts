@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Panels as ServerPanels } from '../../src/dashboard/panels.js';
 import type { VendorInvoiceRow } from '../../src/intake/review.js';
 import type { ImportSummary } from '../../src/boq/importer.js';
-import type { boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, sites, vendors } from '../../src/db/schema.js';
+import type { boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, progressReports, sites, vendors } from '../../src/db/schema.js';
 import type { getPo, getPr } from '../../src/procurement/service.js';
+import type { getReport, getSchedule, sCurve } from '../../src/progress/service.js';
 import type { withEffective } from '../../src/http/routes/company.js';
 import type {
-  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, PurchaseOrderDetail,
-  PurchaseRequestDetail, Site, Vendor,
+  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, PlanEntry, ProgressReport,
+  ProgressReportDetail, PurchaseOrderDetail, PurchaseRequestDetail, SCurveData, Site, Vendor,
 } from '../../web/src/lib/types.js';
 
 /**
@@ -34,10 +35,17 @@ const importSummary: Assignable<ImportSummary, BoqImportSummary> = true;
 const prDetail: Assignable<Awaited<ReturnType<typeof getPr>>, PurchaseRequestDetail> = true;
 const poDetail: Assignable<Awaited<ReturnType<typeof getPo>>, PurchaseOrderDetail> = true;
 const receipt: Assignable<typeof goodsReceipts.$inferSelect, GoodsReceipt> = true;
+/** progress: report rows and detail, the stored plan, the S-curve */
+const report: Assignable<typeof progressReports.$inferSelect, ProgressReport> = true;
+const reportDetail: Assignable<Awaited<ReturnType<typeof getReport>>, ProgressReportDetail> = true;
+const plan: Assignable<Awaited<ReturnType<typeof getSchedule>>[number], PlanEntry> = true;
+const curve: Assignable<Awaited<ReturnType<typeof sCurve>>, SCurveData> = true;
 
 describe('web API types follow the server', () => {
   it('compiles (the check is the assignment above)', () => {
-    expect([dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary, prDetail, poDetail, receipt])
-      .toEqual(Array(13).fill(true));
+    expect([
+      dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary, prDetail, poDetail, receipt,
+      report, reportDetail, plan, curve,
+    ]).toEqual(Array(17).fill(true));
   });
 });

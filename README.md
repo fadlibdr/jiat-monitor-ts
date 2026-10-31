@@ -217,7 +217,7 @@ Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding
 1. **Golden set intake** (LLD §10): 30 foto nota asli dijalankan ke OCR sungguhan, hasil di `test/golden/results.csv`. Adapter OCR dan klien Telegram baru diuji terhadap server palsu.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
 3. **Konfirmasi bagian keuangan** atas rumus tagihan termin (retensi, potongan uang muka, dasar PPN) — `src/domain/invoice.ts`.
-4. **UI, layar berikutnya**: opname + rencana kurva S, invoicing; **ekspor PDF** bulanan. Sudah ada: masuk, pilih
-   perusahaan, review nota, dashboard perusahaan & holding, data master (kontrak, termin, addendum, BOQ, lokasi, vendor,
-   anggota), pembelian (PR → PO → penerimaan barang).
+4. **UI, layar berikutnya**: invoicing; **ekspor PDF** bulanan. Sudah ada: masuk, pilih perusahaan, review nota,
+   dashboard perusahaan & holding, data master (kontrak, termin, addendum, BOQ, lokasi, vendor, anggota), pembelian
+   (PR → PO → penerimaan barang), progres (opname bulanan, persetujuan, rencana kurva S).
 5. **Deploy ke VPS**: contoh konfigurasi di `deploy/` (Supervisor, nginx, cron); provider object storage (S3) masih terbuka.

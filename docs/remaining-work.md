@@ -221,13 +221,19 @@ pilot-priority order:
 5. [x] **PR/PO/GR forms and approvals.** PR with lines (optionally tied to BOQ items), submit / approve / reject; PO from an
    approved PR or blank, issue or cancel; goods receipts per line with an `Idempotency-Key` per form. Quantities and line
    totals use the server's own code (`src/domain/quantity.ts`). *Open:* PO edit before approval, printing a PO.
-6. [ ] **Opname entry and approval, S-curve plan entry.**
+6. [x] **Opname entry and approval, S-curve plan entry.** Per contract: the S-curve (plan vs approved opname), the monthly
+   reports, and the plan. Site staff and admins fill a month (cumulative volume per BOQ leaf, or % for a leaf without a
+   volume; matched to the current BOQ by code) and submit; managers approve or reject. Admins and managers edit the plan:
+   contract-level rows (blank code = every leaf) and per-item rows; a plan stored identically for every leaf comes back
+   as one row per month. Site staff now have a web screen. *Open:* a per-item plan above 500 rows is not editable here
+   (shown on the curve, replaced whole by a save); the latest approved figure per item is not shown beside the input.
 7. [ ] **Invoicing and payments.**
 8. [x] **Company dashboard** (the same panels, live; finance and managers only, LLD §4).
 
-Checked in Chromium against PostgreSQL 16, 25 steps: sign-in, wrong password, picker, review and confirm, a site, a
+Checked in Chromium against PostgreSQL 16, 27 steps: sign-in, wrong password, picker, review and confirm, a site, a
 contract, its termin, a refused and a good RAB import, a category fix, an addendum, vendor bank data (and finance's view),
-a PR submitted and approved, a PO from it issued and partly received (an over-receipt refused), members, sign-out,
+a PR submitted and approved, a PO from it issued and partly received (an over-receipt refused), an opname month (a volume
+above the BOQ and a figure below the approved month refused) submitted and approved, the plan saved, members, sign-out,
 holding dashboard, refresh, 390 px screen. No console errors, no 5xx. Not yet automated in CI (it
 needs a browser and Postgres).
 

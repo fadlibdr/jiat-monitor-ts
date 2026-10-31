@@ -3,6 +3,7 @@ import type {
   HoldingRefresh, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, Member, MyCompany, Panels, Site, TelegramLink, Vendor,
   AddendumInput, ContractInput, ContractPatch, SiteInput, VendorInput, VendorPatch,
   GoodsReceipt, GrInput, PoInput, PoStatus, PrInput, PurchaseOrder, PurchaseOrderDetail, PurchaseRequest, PurchaseRequestDetail,
+  OpnameLineInput, PlanEntry, ProgressReport, ProgressReportDetail, ProgressReportInput, SCurveData,
 } from './types';
 import { errorMessage } from './errors';
 
@@ -135,6 +136,27 @@ export const api = {
       .then((r) => r.data),
   goodsReceipts: (companyId: number, poId: number) =>
     request<{ data: GoodsReceipt[] }>('GET', `/companies/${companyId}/goods-receipts${qs({ poId })}`).then((r) => r.data),
+
+  /** the plan of the current BOQ, one entry per leaf code and month */
+  schedule: (companyId: number, contractId: number) =>
+    request<{ data: PlanEntry[] }>('GET', `/companies/${companyId}/contracts/${contractId}/boq/schedule`).then((r) => r.data),
+  /** replaces the whole plan; `code: null` lines apply to every leaf */
+  putSchedule: (companyId: number, contractId: number, entries: PlanEntry[]) =>
+    request<{ data: { items: number; points: number } }>('PUT', `/companies/${companyId}/contracts/${contractId}/boq/schedule`, entries).then((r) => r.data),
+  sCurve: (companyId: number, contractId: number) =>
+    request<{ data: SCurveData }>('GET', `/companies/${companyId}/contracts/${contractId}/s-curve`).then((r) => r.data),
+  progressReports: (companyId: number, contractId: number) =>
+    request<{ data: ProgressReport[] }>('GET', `/companies/${companyId}/progress-reports${qs({ contractId })}`).then((r) => r.data),
+  progressReport: (companyId: number, id: number) =>
+    request<{ data: ProgressReportDetail }>('GET', `/companies/${companyId}/progress-reports/${id}`).then((r) => r.data),
+  createProgressReport: (companyId: number, body: ProgressReportInput) =>
+    request<{ data: ProgressReport }>('POST', `/companies/${companyId}/progress-reports`, body).then((r) => r.data),
+  /** replaces the lines of a draft / rejected report */
+  putProgressItems: (companyId: number, id: number, lines: OpnameLineInput[]) =>
+    request<unknown>('PUT', `/companies/${companyId}/progress-reports/${id}/items`, lines),
+  /** submit: site staff and admins; approve / reject: managers */
+  progressAction: (companyId: number, id: number, action: 'submit' | 'approve' | 'reject') =>
+    request<{ data: ProgressReport }>('POST', `/companies/${companyId}/progress-reports/${id}/${action}`, {}).then((r) => r.data),
 
   setBoqCategory: (companyId: number, contractId: number, itemId: number, category: Category | null) =>
     request<{ data: BoqItem }>('PATCH', `/companies/${companyId}/contracts/${contractId}/boq/items/${itemId}`, { category }).then((r) => r.data),

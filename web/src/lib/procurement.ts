@@ -89,7 +89,7 @@ export function poBody(f: PoForm): Built<PoInput> {
 }
 
 /** "12.5000" → "12,5" for an input the user may edit (parseQty reads both marks). */
-const qtyText = (stored: string) => (stored.includes('.') ? stored.replace(/0+$/, '').replace(/\.$/, '') : stored).replace('.', ',');
+export const qtyText = (stored: string) => (stored.includes('.') ? stored.replace(/0+$/, '').replace(/\.$/, '') : stored).replace('.', ',');
 const rupiahText = (cents: number | null) => (cents === null ? '' : String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'));
 
 /** A PO started from an approved PR: same site and contract, its lines with the estimated prices to confirm. */
