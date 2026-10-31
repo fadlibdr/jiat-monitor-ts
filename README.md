@@ -111,7 +111,9 @@ CI (`.github/workflows/ci.yml`) menjalankan typecheck, test, build, dan menolak 
 job `web` menjalankan typecheck + build UI dan menolak script inline di `index.html` (CSP server: `script-src 'self'`).
 
 UI (`/app/`): masuk, pilih perusahaan (+ tautkan Telegram), review nota (LLD §7), dashboard perusahaan (`finance`/manajer),
-dashboard holding (filter, segarkan, unduh XLSX). Header keamanan dari `src/http/web.ts`: CSP hanya `self` (tanpa script/style
+dashboard holding (filter, segarkan, unduh XLSX), data master: kontrak (data, termin, addendum, impor RAB + kategori biaya
+per item), lokasi, vendor (rekening & NPWP hanya `finance`/manajer), anggota (hanya manajer). Isian rupiah dibaca dengan
+parser server yang sama (`src/domain/money.ts`), jadi yang diterima form = yang diterima API. Header keamanan dari `src/http/web.ts`: CSP hanya `self` (tanpa script/style
 inline), `frame-ancestors 'none'`; aset ber-hash di-cache setahun, `index.html` tidak pernah di-cache.
 
 Role Postgres yang dibutuhkan (dibuat `db:migrate`, kecuali login): `jiat_app` (NOLOGIN, RLS), `jiat_holding` (NOLOGIN, SELECT lintas perusahaan).
@@ -215,6 +217,7 @@ Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding
 1. **Golden set intake** (LLD §10): 30 foto nota asli dijalankan ke OCR sungguhan, hasil di `test/golden/results.csv`. Adapter OCR dan klien Telegram baru diuji terhadap server palsu.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
 3. **Konfirmasi bagian keuangan** atas rumus tagihan termin (retensi, potongan uang muka, dasar PPN) — `src/domain/invoice.ts`.
-4. **UI, layar berikutnya**: master data (site, kontrak, termin, vendor, anggota), PR/PO/GR, opname + rencana kurva S,
-   invoicing; **ekspor PDF** bulanan. Sudah ada: masuk, pilih perusahaan, review nota, dashboard perusahaan & holding.
+4. **UI, layar berikutnya**: PR/PO/GR, opname + rencana kurva S, invoicing; **ekspor PDF** bulanan. Sudah ada: masuk,
+   pilih perusahaan, review nota, dashboard perusahaan & holding, data master (kontrak, termin, addendum, BOQ, lokasi,
+   vendor, anggota).
 5. **Deploy ke VPS**: contoh konfigurasi di `deploy/` (Supervisor, nginx, cron); provider object storage (S3) masih terbuka.

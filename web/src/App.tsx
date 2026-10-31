@@ -3,7 +3,7 @@ import { ErrorNotice, Loading } from './components/ui';
 import { api, ApiError, setUnauthorizedHandler } from './lib/api';
 import { match, navigate, usePath } from './lib/router';
 import type { Me, MyCompany } from './lib/types';
-import { CompanyArea, type CompanyView } from './pages/CompanyArea';
+import { CompanyArea, COMPANY_VIEWS, type CompanyView } from './pages/CompanyArea';
 import { HoldingDashboard } from './pages/HoldingDashboard';
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
@@ -58,14 +58,16 @@ export function App() {
   if (path === '/holding') {
     return me.holdingViewer ? <HoldingDashboard me={me} onSignOut={signOut} /> : <NotFound text="Halaman holding hanya untuk holding viewer." />;
   }
-  const c = match('/c/:companyId', path) ?? match('/c/:companyId/:view', path);
+  const c = match('/c/:companyId', path) ?? match('/c/:companyId/:view', path) ?? match('/c/:companyId/:view/:itemId', path);
   if (c) {
     const company = companies.find((x) => String(x.id) === c['companyId']);
     const view = (c['view'] ?? 'home') as CompanyView;
+    // only a contract has a detail page (/c/:id/contracts/:contractId)
+    const itemId = c['itemId'] === undefined ? undefined : /^\d{1,15}$/.test(c['itemId']) ? Number(c['itemId']) : NaN;
     if (!company) return <NotFound text="Anda tidak terdaftar pada perusahaan ini." />;
-    if (!['home', 'intake', 'dashboard'].includes(view)) return <NotFound text="Halaman tidak ditemukan." />;
+    if (!COMPANY_VIEWS.includes(view) || Number.isNaN(itemId) || (itemId !== undefined && view !== 'contracts')) return <NotFound text="Halaman tidak ditemukan." />;
     // keyed: going from one company straight to another (history) starts with empty state, not the previous company's
-    return <CompanyArea key={company.id} me={me} company={company} view={view} onSignOut={signOut} />;
+    return <CompanyArea key={company.id} me={me} company={company} view={view} itemId={itemId} onSignOut={signOut} />;
   }
   if (path !== '/') return <NotFound text="Halaman tidak ditemukan." />;
   return <Home me={me} companies={companies} onSignOut={signOut} />;

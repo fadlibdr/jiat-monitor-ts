@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api';
 import { dateLabel, rupiah, shortRef } from '../lib/format';
 import { editMode, formOf, listedIn, patchOf, type IntakeForm } from '../lib/intake';
 import { CATEGORY_LABEL, FLAG_TEXT, INTAKE_STATUS_LABEL as STATUS_LABEL } from '../lib/labels';
+import { can, EDIT_ROLES } from '../lib/roles';
 import { useAsync } from '../lib/useAsync';
 import type { Category, CompanyRole, IntakePatch, IntakeRow, IntakeStatus, Site, Vendor } from '../lib/types';
 
@@ -17,8 +18,6 @@ const TABS: Array<{ status: IntakeStatus | undefined; label: string }> = [
   { status: 'terkonfirmasi', label: 'Terkonfirmasi' },
   { status: 'ditolak', label: 'Ditolak' },
 ];
-/** Who may change a row (server: EDIT_ROLES on PATCH); finance reviews read-only. */
-const EDIT_ROLES: readonly CompanyRole[] = ['project_admin', 'company_manager', 'system_admin'];
 
 /** LLD §7 IntakeReview: rows the bot could not settle, with the photo, the flags and the same corrections as in chat. */
 export function IntakeReview({ companyId, role }: { companyId: number; role: CompanyRole }) {
@@ -30,7 +29,8 @@ export function IntakeReview({ companyId, role }: { companyId: number; role: Com
   const [selected, setSelected] = useState<string>();
   /** what happened to a row that just left this list (it can no longer show its own message) */
   const [flash, setFlash] = useState<string>();
-  const canEdit = EDIT_ROLES.includes(role);
+  // who may change a row (server: EDIT_ROLES on PATCH); finance reviews read-only
+  const canEdit = can(role, EDIT_ROLES);
 
   // The list belongs to one filter. On a change it starts empty, and an answer for an older filter
   // ("Muat lagi" or a save still in flight) is dropped instead of being mixed into the new list.

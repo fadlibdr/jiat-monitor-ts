@@ -4,35 +4,54 @@ import { Shell, type NavItem } from '../components/Shell';
 import { ErrorNotice, Loading } from '../components/ui';
 import { api } from '../lib/api';
 import { currentMonthWib } from '../lib/format';
+import { can, DASHBOARD_ROLES, EDIT_ROLES, FINANCE_ROLES, MANAGE_ROLES, MASTER_ROLES, REVIEW_ROLES, VENDOR_WRITE_ROLES } from '../lib/roles';
 import { navigate } from '../lib/router';
 import { ROLE_LABEL } from '../lib/status';
 import { useAsync } from '../lib/useAsync';
 import type { CompanyRole, Me, MyCompany } from '../lib/types';
 import { IntakeReview } from './IntakeReview';
+import { ContractDetail } from './master/ContractDetail';
+import { Contracts } from './master/Contracts';
+import { Members } from './master/Members';
+import { Sites } from './master/Sites';
+import { Vendors } from './master/Vendors';
 
-/** Server role sets (src/http/context.ts): the review list and the company dashboard. */
-const REVIEW_ROLES: readonly CompanyRole[] = ['project_admin', 'finance', 'company_manager', 'system_admin'];
-const DASHBOARD_ROLES: readonly CompanyRole[] = ['finance', 'company_manager', 'system_admin'];
+export const COMPANY_VIEWS = ['home', 'intake', 'dashboard', 'contracts', 'sites', 'vendors', 'members'] as const;
+export type CompanyView = (typeof COMPANY_VIEWS)[number];
 
-export type CompanyView = 'home' | 'intake' | 'dashboard';
+const VIEW: Record<Exclude<CompanyView, 'home'>, { label: string; roles: readonly CompanyRole[] }> = {
+  dashboard: { label: 'Dashboard perusahaan', roles: DASHBOARD_ROLES },
+  intake: { label: 'Review nota', roles: REVIEW_ROLES },
+  contracts: { label: 'Kontrak', roles: MASTER_ROLES },
+  sites: { label: 'Lokasi', roles: MASTER_ROLES },
+  vendors: { label: 'Vendor', roles: MASTER_ROLES },
+  members: { label: 'Anggota', roles: MASTER_ROLES },
+};
 
 /** Everything under /c/:companyId: the screens this role may open, in the shell. */
-export function CompanyArea({ me, company, view, onSignOut }: { me: Me; company: MyCompany; view: CompanyView; onSignOut: () => Promise<void> }) {
+export function CompanyArea({ me, company, view, itemId, onSignOut }: {
+  me: Me; company: MyCompany; view: CompanyView; itemId?: number | undefined; onSignOut: () => Promise<void>;
+}) {
   const base = `/c/${company.id}`;
-  const nav: Array<NavItem | { head: string }> = [{ head: company.code }];
-  if (DASHBOARD_ROLES.includes(company.role)) nav.push({ to: `${base}/dashboard`, label: 'Dashboard perusahaan' });
-  if (REVIEW_ROLES.includes(company.role)) nav.push({ to: `${base}/intake`, label: 'Review nota' });
-  nav.push({ to: '/', label: 'Ganti ruang kerja' });
+  const role = company.role;
+  const item = (v: Exclude<CompanyView, 'home'>): NavItem[] => (can(role, VIEW[v].roles) ? [{ to: `${base}/${v}`, label: VIEW[v].label }] : []);
+  const work = [...item('dashboard'), ...item('intake')];
+  const master = [...item('contracts'), ...item('sites'), ...item('vendors'), ...item('members')];
+  const nav: Array<NavItem | { head: string }> = [
+    { head: company.code }, ...work,
+    ...(master.length ? [{ head: 'Data master' }, ...master] : []),
+    { to: '/', label: 'Ganti ruang kerja' },
+  ];
 
   // /c/:id opens the first screen the role has (after render: navigating updates the App's state)
-  const landing = nav.find((n): n is NavItem => 'to' in n && n.to !== '/');
+  const landing = [...work, ...master][0];
   const redirect = view === 'home' && landing ? landing.to : null;
   useEffect(() => {
     if (redirect) navigate(redirect, { replace: true });
   }, [redirect]);
   if (redirect) return null;
-  const allowed = view === 'intake' ? REVIEW_ROLES.includes(company.role) : view === 'dashboard' ? DASHBOARD_ROLES.includes(company.role) : false;
-  const title = view === 'intake' ? 'Review nota' : view === 'dashboard' ? 'Dashboard perusahaan' : 'Beranda';
+  const allowed = view !== 'home' && can(role, VIEW[view].roles);
+  const title = view === 'home' ? 'Beranda' : VIEW[view].label;
 
   return (
     <Shell
@@ -41,18 +60,24 @@ export function CompanyArea({ me, company, view, onSignOut }: { me: Me; company:
       nav={nav}
       current={`${base}/${view}`}
       onSignOut={onSignOut}
-      roleNote={`peran: ${ROLE_LABEL[company.role] ?? company.role}`}
+      roleNote={`peran: ${ROLE_LABEL[role] ?? role}`}
       crumbs={<>{company.name} › <b>{title}</b></>}
     >
       {!allowed && (
         <div className="notice">
-          {company.role === 'site_staff'
+          {role === 'site_staff'
             ? 'Staf site mengirim foto nota dan opname lewat bot Telegram di grup lokasi. Belum ada layar web untuk peran ini.'
             : 'Peran Anda tidak membuka halaman ini.'}
         </div>
       )}
-      {allowed && view === 'intake' && <IntakeReview companyId={company.id} role={company.role} />}
+      {allowed && view === 'intake' && <IntakeReview companyId={company.id} role={role} />}
       {allowed && view === 'dashboard' && <CompanyDashboard company={company} />}
+      {allowed && view === 'contracts' && (itemId
+        ? <ContractDetail key={itemId} companyId={company.id} contractId={itemId} canEdit={can(role, EDIT_ROLES)} />
+        : <Contracts companyId={company.id} canEdit={can(role, EDIT_ROLES)} />)}
+      {allowed && view === 'sites' && <Sites companyId={company.id} canEdit={can(role, EDIT_ROLES)} />}
+      {allowed && view === 'vendors' && <Vendors companyId={company.id} canEdit={can(role, VENDOR_WRITE_ROLES)} seesPii={can(role, FINANCE_ROLES)} />}
+      {allowed && view === 'members' && <Members companyId={company.id} canManage={can(role, MANAGE_ROLES)} />}
     </Shell>
   );
 }
