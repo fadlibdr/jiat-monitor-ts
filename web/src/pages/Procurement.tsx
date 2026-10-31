@@ -35,7 +35,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
   const lk = lookups.data ?? { sites: [], vendors: [], contracts: [] };
   const siteName = (id: number) => lk.sites.find((s) => s.id === id)?.name ?? `#${id}`;
   const vendorName = (id: number) => lk.vendors.find((v) => v.id === id)?.name ?? `#${id}`;
-  const showPanel = (p: Panel | undefined) => { setFlash(undefined); setPanel(p); };
+  const selectPanel = (p: Panel | undefined) => { setFlash(undefined); setPanel(p); };
 
   return (
     <>
@@ -46,13 +46,13 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
       <div className="review">
         <Card>
           <div className="tabs" role="tablist" aria-label="Dokumen">
-            <button type="button" role="tab" aria-selected={tab === 'pr'} onClick={() => { setTab('pr'); showPanel(undefined); }}>Permintaan (PR)</button>
-            <button type="button" role="tab" aria-selected={tab === 'po'} onClick={() => { setTab('po'); showPanel(undefined); }}>Pesanan (PO)</button>
+            <button type="button" role="tab" aria-selected={tab === 'pr'} onClick={() => { setTab('pr'); selectPanel(undefined); }}>Permintaan (PR)</button>
+            <button type="button" role="tab" aria-selected={tab === 'po'} onClick={() => { setTab('po'); selectPanel(undefined); }}>Pesanan (PO)</button>
           </div>
           <Notice note={flash} />
           {tab === 'pr' && (
             <>
-              {canEdit && <p><button type="button" className="btn" onClick={() => showPanel({ kind: 'new-pr' })}>Buat PR</button></p>}
+              {canEdit && <p><button type="button" className="btn" onClick={() => selectPanel({ kind: 'new-pr' })}>Buat PR</button></p>}
               {prs.error && <ErrorNotice error={prs.error} onRetry={prs.reload} />}
               {prs.loading && !prs.data && <Loading what="PR" />}
               {prs.data && prs.data.length === 0 && <div className="empty">Belum ada permintaan pembelian.</div>}
@@ -63,7 +63,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
                     <tbody>
                       {prs.data.map((p) => (
                         <tr key={p.id} className={`selectable ${panel?.kind === 'pr' && panel.id === p.id ? 'selected' : ''}`} tabIndex={0}
-                          onClick={() => showPanel({ kind: 'pr', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') showPanel({ kind: 'pr', id: p.id }); }}>
+                          onClick={() => selectPanel({ kind: 'pr', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') selectPanel({ kind: 'pr', id: p.id }); }}>
                           <td className="code">{p.number}</td>
                           <td>{siteName(p.siteId)}</td>
                           <td>{dateLabel(p.neededBy)}</td>
@@ -78,7 +78,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
           )}
           {tab === 'po' && (
             <>
-              {canEdit && <p><button type="button" className="btn" onClick={() => showPanel({ kind: 'new-po' })}>Buat PO</button></p>}
+              {canEdit && <p><button type="button" className="btn" onClick={() => selectPanel({ kind: 'new-po' })}>Buat PO</button></p>}
               {pos.error && <ErrorNotice error={pos.error} onRetry={pos.reload} />}
               {pos.loading && !pos.data && <Loading what="PO" />}
               {pos.data && pos.data.length === 0 && <div className="empty">Belum ada pesanan pembelian.</div>}
@@ -89,7 +89,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
                     <tbody>
                       {pos.data.map((p) => (
                         <tr key={p.id} className={`selectable ${panel?.kind === 'po' && panel.id === p.id ? 'selected' : ''}`} tabIndex={0}
-                          onClick={() => showPanel({ kind: 'po', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') showPanel({ kind: 'po', id: p.id }); }}>
+                          onClick={() => selectPanel({ kind: 'po', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') selectPanel({ kind: 'po', id: p.id }); }}>
                           <td className="code">{p.number}</td>
                           <td>{vendorName(p.vendorId)}</td>
                           <td>{siteName(p.siteId)}</td>
@@ -116,7 +116,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
           )}
           {panel?.kind === 'pr' && (
             <PrDetail key={panel.id} companyId={companyId} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove}
-              onChanged={prs.reload} onMakePo={(pr) => { setTab('po'); showPanel({ kind: 'new-po', from: poFormFromPr(pr, todayWib()) }); }} />
+              onChanged={prs.reload} onMakePo={(pr) => { setTab('po'); selectPanel({ kind: 'new-po', from: poFormFromPr(pr, todayWib()) }); }} />
           )}
           {panel?.kind === 'po' && (
             <PoDetail key={panel.id} companyId={companyId} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove} onChanged={() => { pos.reload(); prs.reload(); }} />
