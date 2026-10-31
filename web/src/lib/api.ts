@@ -1,5 +1,7 @@
 import type {
-  HoldingDashboard, HoldingRefresh, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, MyCompany, Panels, Site, TelegramLink, Vendor,
+  Addendum, BoqImportSummary, BoqItem, BoqVersion, Category, CompanyRole, Contract, ContractDetail, ContractTerm, HoldingDashboard,
+  HoldingRefresh, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, Member, MyCompany, Panels, Site, TelegramLink, Vendor,
+  AddendumInput, ContractInput, ContractPatch, SiteInput, VendorInput, VendorPatch,
 } from './types';
 import { errorMessage } from './errors';
 
@@ -25,12 +27,14 @@ export function setUnauthorizedHandler(fn: () => void): void {
 
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  // same origin: the session cookie is httpOnly and goes along by itself; nothing is kept in JS
+  // same origin: the session cookie is httpOnly and goes along by itself; nothing is kept in JS.
+  // A FormData body (file upload) sets its own multipart content type.
+  const form = body instanceof FormData;
   const res = await fetch(path, {
     method,
     credentials: 'same-origin',
-    headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    headers: body === undefined || form ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }),
   });
   if (res.status === 401) onUnauthorized();
   const text = await res.text();
@@ -74,7 +78,44 @@ export const api = {
   telegramLink: () => request<{ data: TelegramLink }>('POST', '/me/telegram-link').then((r) => r.data),
 
   sites: (companyId: number) => request<{ data: Site[] }>('GET', `/companies/${companyId}/sites`).then((r) => r.data),
+  createSite: (companyId: number, body: SiteInput) => request<{ data: Site }>('POST', `/companies/${companyId}/sites`, body).then((r) => r.data),
+  patchSite: (companyId: number, siteId: number, body: Partial<SiteInput> & { status?: string }) =>
+    request<{ data: Site }>('PATCH', `/companies/${companyId}/sites/${siteId}`, body).then((r) => r.data),
+
   vendors: (companyId: number) => request<{ data: Vendor[] }>('GET', `/companies/${companyId}/vendors`).then((r) => r.data),
+  createVendor: (companyId: number, body: VendorInput) => request<{ data: Vendor }>('POST', `/companies/${companyId}/vendors`, body).then((r) => r.data),
+  patchVendor: (companyId: number, vendorId: number, body: VendorPatch) =>
+    request<{ data: Vendor }>('PATCH', `/companies/${companyId}/vendors/${vendorId}`, body).then((r) => r.data),
+
+  members: (companyId: number) => request<{ data: Member[] }>('GET', `/companies/${companyId}/members`).then((r) => r.data),
+  /** upsert: adds the member, or changes the role / sites of an existing one */
+  putMember: (companyId: number, body: { email: string; role: CompanyRole; siteIds?: number[] }) =>
+    request<unknown>('POST', `/companies/${companyId}/members`, body),
+  removeMember: (companyId: number, userId: number) => request<unknown>('DELETE', `/companies/${companyId}/members/${userId}`),
+
+  contracts: (companyId: number) => request<{ data: Contract[] }>('GET', `/companies/${companyId}/contracts`).then((r) => r.data),
+  createContract: (companyId: number, body: ContractInput) =>
+    request<{ data: Contract }>('POST', `/companies/${companyId}/contracts`, body).then((r) => r.data),
+  contract: (companyId: number, contractId: number) =>
+    request<{ data: ContractDetail }>('GET', `/companies/${companyId}/contracts/${contractId}`).then((r) => r.data),
+  patchContract: (companyId: number, contractId: number, body: ContractPatch) =>
+    request<{ data: Contract }>('PATCH', `/companies/${companyId}/contracts/${contractId}`, body).then((r) => r.data),
+  /** replaces the whole termin schedule */
+  putTerms: (companyId: number, contractId: number, terms: Array<Omit<ContractTerm, 'id'>>) =>
+    request<{ data: ContractTerm[]; complete: boolean; totalBp: number }>('PUT', `/companies/${companyId}/contracts/${contractId}/terms`, terms),
+  addAddendum: (companyId: number, contractId: number, body: AddendumInput) =>
+    request<{ data: { addendum: Addendum; contract: Contract } }>('POST', `/companies/${companyId}/contracts/${contractId}/addendums`, body).then((r) => r.data),
+  /** null when the contract has no BOQ yet (404) */
+  boq: (companyId: number, contractId: number) =>
+    request<{ data: { version: BoqVersion; items: BoqItem[] } }>('GET', `/companies/${companyId}/contracts/${contractId}/boq`)
+      .then((r) => r.data, (e: unknown) => { if (e instanceof ApiError && e.status === 404) return null; throw e; }),
+  importBoq: (companyId: number, contractId: number, file: File, sheet: string) => {
+    const body = new FormData();
+    body.set('file', file);
+    return request<{ data: BoqImportSummary }>('POST', `/companies/${companyId}/contracts/${contractId}/boq/import${qs({ sheet })}`, body).then((r) => r.data);
+  },
+  setBoqCategory: (companyId: number, contractId: number, itemId: number, category: Category | null) =>
+    request<{ data: BoqItem }>('PATCH', `/companies/${companyId}/contracts/${contractId}/boq/items/${itemId}`, { category }).then((r) => r.data),
 
   intakeReview: (companyId: number, q: { status?: IntakeStatus | undefined; siteId?: number | undefined; cursor?: string | null | undefined }) =>
     request<IntakePage>('GET', `/companies/${companyId}/intake/review${qs({ status: q.status, siteId: q.siteId, cursor: q.cursor })}`),

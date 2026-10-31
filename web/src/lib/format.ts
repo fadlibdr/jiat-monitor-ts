@@ -106,6 +106,15 @@ export function periodOfIndex(index: number): string {
   return `${String(Math.floor(index / 12)).padStart(4, '0')}-${String((index % 12) + 1).padStart(2, '0')}-01`;
 }
 
+/** A BOQ volume as stored ("26.0000", "1250.5000") → "26", "1.250,5"; null → "". */
+export function qtyLabel(qty: string | null | undefined): string {
+  if (qty === null || qty === undefined || qty === '') return '';
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(qty.trim());
+  if (!m) return qty;
+  const frac = (m[3] ?? '').replace(/0+$/, '');
+  return `${m[1] ? MINUS : ''}${groupThousands(Number(m[2]))}${frac ? `,${frac}` : ''}`;
+}
+
 /** A calendar date "2026-10-27" → "27 Okt 2026" (no time zone involved). */
 export function dateLabel(iso: string | null | undefined): string {
   if (!iso) return '—';

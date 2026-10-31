@@ -26,11 +26,121 @@ export interface Site {
   id: number;
   code: string;
   name: string;
+  location: string | null;
+  province: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  /** 'active' | 'closed' */
+  status: string;
 }
+
+export type VendorStatus = 'active' | 'draft';
 
 export interface Vendor {
   id: number;
   name: string;
+  /** null unless the caller is finance or a manager (and when not recorded) */
+  npwp: string | null;
+  bankName: string | null;
+  bankAccount: string | null;
+  phone: string | null;
+  defaultCategory: Category | null;
+  /** days from the nota date to its due date; null = 30 */
+  paymentTermsDays: number | null;
+  /** draft = created by the bot from a nota, not yet checked */
+  status: VendorStatus;
+}
+
+export interface Member {
+  userId: number;
+  email: string;
+  name: string;
+  role: CompanyRole;
+  /** null = every site (a site_staff with null has none: assign sites) */
+  siteIds: number[] | null;
+}
+
+export type ContractStatus = 'draft' | 'active' | 'completed' | 'terminated';
+
+/** A contract with the addenda applied (GET /contracts, /contracts/:id). */
+export interface Contract {
+  id: number;
+  siteId: number;
+  number: string;
+  employerName: string;
+  /** as signed; the value in force is valueDppEffectiveCents */
+  valueDppCents: number;
+  ppnRateBp: number;
+  retentionBp: number;
+  advanceCents: number;
+  signedAt: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: string;
+  valueDppEffectiveCents: number;
+  addendumDeltaCents: number;
+  valueTotalCents: number;
+  endDateEffective: string | null;
+  daysLeft: number | null;
+}
+
+export interface ContractTerm {
+  id: number;
+  seq: number;
+  name: string;
+  percentBp: number;
+  triggerProgressBp: number;
+  dueDays: number;
+}
+
+export interface Addendum {
+  id: number;
+  number: string;
+  signedAt: string;
+  valueDeltaCents: number;
+  endDateNew: string | null;
+  note: string | null;
+}
+
+export interface ContractDetail extends Contract {
+  terms: ContractTerm[];
+  /** Σ termin = 100 % */
+  termsComplete: boolean;
+  addendums: Addendum[];
+}
+
+export interface BoqVersion {
+  id: number;
+  version: number;
+  sourceFilename: string | null;
+  totalCents: number;
+  anomalies: unknown[];
+}
+
+export interface BoqItem {
+  id: number;
+  parentId: number | null;
+  code: string;
+  codePrinted: string | null;
+  description: string;
+  unit: string | null;
+  qty: string | null;
+  unitPriceCents: number | null;
+  amountCents: number;
+  /** 100 % = 100_000_000 */
+  weightMicroPct: number;
+  category: Category | null;
+  level: number;
+  isLeaf: boolean;
+}
+
+export interface BoqImportSummary {
+  version: number;
+  items: number;
+  leaves: number;
+  total: string;
+  contractValueDpp: string;
+  anomalies: Array<{ row: number; type: string; detail: string }>;
 }
 
 // --- intake review ---------------------------------------------------------------------------
@@ -205,4 +315,62 @@ export interface TelegramLink {
   code: string;
   expiresAt: string;
   link: string | null;
+}
+
+// --- request bodies (master data) ---
+
+export interface SiteInput {
+  code: string;
+  name: string;
+  location?: string;
+  province?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+export interface VendorInput {
+  name: string;
+  phone?: string;
+  defaultCategory?: Category;
+  paymentTermsDays?: number;
+  npwp?: string;
+  bankName?: string;
+  bankAccount?: string;
+}
+
+/** null clears a field */
+export type VendorPatch = {
+  name?: string;
+  status?: 'active' | 'draft';
+  phone?: string | null;
+  defaultCategory?: Category | null;
+  paymentTermsDays?: number | null;
+  npwp?: string | null;
+  bankName?: string | null;
+  bankAccount?: string | null;
+};
+
+export interface ContractInput {
+  siteId: number;
+  number: string;
+  employerName: string;
+  valueDppCents: number;
+  ppnRateBp?: number;
+  retentionBp?: number;
+  advanceCents?: number;
+  signedAt?: string;
+  startDate?: string;
+  endDate?: string;
+  status?: string;
+}
+
+/** the DPP changes only through an addendum */
+export type ContractPatch = Partial<Omit<ContractInput, 'siteId' | 'number' | 'valueDppCents'>>;
+
+export interface AddendumInput {
+  number: string;
+  signedAt: string;
+  valueDeltaCents?: number;
+  endDateNew?: string;
+  note?: string;
 }

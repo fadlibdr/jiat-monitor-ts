@@ -185,6 +185,13 @@ tr.selected td { background: var(--blue-bg); }
 .notice { border: 1px solid var(--line); border-left: 3px solid var(--navy); background: var(--card); padding: 10px 14px; border-radius: var(--radius); margin-bottom: 14px; }
 .notice.error { border-left-color: var(--red-ink); background: var(--red-bg); color: var(--red-ink); }
 .notice.ok { border-left-color: var(--green-ink); background: var(--green-bg); color: var(--green-ink); }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
+.narrow { max-width: 640px; }
+.h3 { font-size: 15px; margin: 8px 0 10px; }
+input.small-input { width: 6.5em; text-align: right; }
+tr.section td { font-weight: 600; background: var(--bg, #f7f7f5); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 6px 0; }
+.checks label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
 .notice.warn { border-left-color: var(--amber); background: var(--amber-bg); color: var(--amber-ink); }
 .signout-error { display: block; margin-top: 6px; color: var(--red-ink); }
 .whoami .signout-error { color: #ffd2a6; }
