@@ -118,8 +118,8 @@ export const contractFormOf = (k?: Contract): ContractForm => ({
   endDate: k?.endDate ?? '', status: k?.status ?? 'active',
 });
 
-type Terms = { ppnRateBp: number; retentionBp: number; advanceCents: number };
-function contractTerms(f: ContractForm): Built<Terms> {
+type MoneyTerms = { ppnRateBp: number; retentionBp: number; advanceCents: number };
+function moneyTermsOf(f: ContractForm): Built<MoneyTerms> {
   const ppnRateBp = parsePercentBp(f.ppn);
   if (ppnRateBp === null) return fail('PPN: persen 0–100, mis. 11.');
   const retentionBp = parsePercentBp(f.retention);
@@ -136,7 +136,7 @@ export function contractBody(f: ContractForm): Built<ContractInput> {
   if (f.employerName.trim().length < 2) return fail('Pemberi kerja minimal 2 karakter.');
   const valueDppCents = parseIdrCents(f.valueDpp);
   if (!valueDppCents) return fail('Nilai DPP tidak terbaca atau 0 (tulis mis. 8.150.000.000).');
-  const t = contractTerms(f);
+  const t = moneyTermsOf(f);
   if (!t.ok) return t;
   if (t.body.advanceCents > valueDppCents) return fail('Uang muka melebihi nilai DPP kontrak.');
   const body: ContractInput = { siteId: Number(f.siteId), number: f.number.trim(), employerName: f.employerName.trim(), valueDppCents, ...t.body, status: f.status };
@@ -149,7 +149,7 @@ export function contractBody(f: ContractForm): Built<ContractInput> {
 /** Number, site and DPP are not edited here: the DPP changes only through an addendum. */
 export function contractPatchOf(k: Contract, f: ContractForm): Built<ContractPatch> {
   if (f.employerName.trim().length < 2) return fail('Pemberi kerja minimal 2 karakter.');
-  const t = contractTerms(f);
+  const t = moneyTermsOf(f);
   if (!t.ok) return t;
   if (t.body.advanceCents > k.valueDppEffectiveCents) return fail('Uang muka melebihi nilai DPP kontrak.');
   const body: ContractPatch = {};
