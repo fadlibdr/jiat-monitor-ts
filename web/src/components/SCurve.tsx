@@ -38,6 +38,7 @@ export function SCurve({ points, period }: { points: readonly CurvePoint[]; peri
   const sel = monthIndex(period);
   const onAxis = sel !== null && sel >= first && sel <= last ? sel : null;
   const now = pts.find((p) => p.m === sel);
+  const actualAhead = now?.actualMicroPct != null && now.actualMicroPct > now.plannedMicroPct;
   const summary = now
     ? `Kurva S: rencana ${percentMicro(now.plannedMicroPct)}, realisasi ${percentMicro(now.actualMicroPct)} pada ${monthLong(period)}`
     : `Kurva S ${monthLong(pts[0]!.period)} sampai ${monthLong(pts[pts.length - 1]!.period)}`;
@@ -59,12 +60,13 @@ export function SCurve({ points, period }: { points: readonly CurvePoint[]; peri
         {onAxis !== null && <line className="sc-now" x1={x(onAxis)} x2={x(onAxis)} y1={PAD.top} y2={H - PAD.bottom} />}
         {now && (
           <g>
+            {/* the higher value's label goes above its dot, the lower's below, so close values never overlap */}
             <circle className="sc-plan-dot" cx={x(now.m)} cy={y(now.plannedMicroPct)} r="3" />
-            <text className="sc-axis" x={x(now.m) + 6} y={y(now.plannedMicroPct) - 4}>{percentMicro(now.plannedMicroPct)}</text>
+            <text className="sc-axis" x={x(now.m) + 6} y={y(now.plannedMicroPct) + (actualAhead ? 10 : -4)}>{percentMicro(now.plannedMicroPct)}</text>
             {now.actualMicroPct !== null && (
               <>
                 <circle className="sc-actual-dot" cx={x(now.m)} cy={y(now.actualMicroPct)} r="3.5" />
-                <text className="sc-axis sc-actual-label" x={x(now.m) + 6} y={y(now.actualMicroPct) + 10}>{percentMicro(now.actualMicroPct)}</text>
+                <text className="sc-axis sc-actual-label" x={x(now.m) + 6} y={y(now.actualMicroPct) + (actualAhead ? -4 : 10)}>{percentMicro(now.actualMicroPct)}</text>
               </>
             )}
           </g>

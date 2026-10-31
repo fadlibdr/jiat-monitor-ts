@@ -89,8 +89,8 @@ export function poBody(f: PoForm): Built<PoInput> {
 }
 
 /** "12.5000" → "12,5" for an input the user may edit (parseQty reads both marks). */
-const qtyInput = (stored: string) => (stored.includes('.') ? stored.replace(/0+$/, '').replace(/\.$/, '') : stored).replace('.', ',');
-const priceInput = (cents: number | null) => (cents === null ? '' : String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'));
+export const qtyText = (stored: string) => (stored.includes('.') ? stored.replace(/0+$/, '').replace(/\.$/, '') : stored).replace('.', ',');
+const rupiahText = (cents: number | null) => (cents === null ? '' : String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'));
 
 /** A PO started from an approved PR: same site and contract, its lines with the estimated prices to confirm. */
 export function poFormFromPr(pr: PurchaseRequestDetail, today: string): PoForm {
@@ -99,7 +99,7 @@ export function poFormFromPr(pr: PurchaseRequestDetail, today: string): PoForm {
     orderDate: today, expectedDate: pr.neededBy ?? '', note: '',
     lines: pr.items.map((i) => ({
       boqItemId: i.boqItemId ? String(i.boqItemId) : '', prItemId: i.id, description: i.description,
-      qty: qtyInput(i.qty), unit: i.unit ?? '', price: priceInput(i.estPriceCents),
+      qty: qtyText(i.qty), unit: i.unit ?? '', price: rupiahText(i.estPriceCents),
     })),
   };
 }
@@ -108,7 +108,7 @@ export function poFormFromPr(pr: PurchaseRequestDetail, today: string): PoForm {
 export function receiptRows(po: PurchaseOrderDetail): Array<{ poItemId: number; description: string; unit: string | null; ordered: string; received: string; remaining: string }> {
   return po.items.map((i) => {
     const left = Math.max(0, (parseQty(i.qty) ?? 0) - (parseQty(i.qtyReceived) ?? 0));
-    return { poItemId: i.id, description: i.description, unit: i.unit, ordered: i.qty, received: i.qtyReceived, remaining: left ? qtyInput(qtyToString(left)) : '0' };
+    return { poItemId: i.id, description: i.description, unit: i.unit, ordered: i.qty, received: i.qtyReceived, remaining: left ? qtyText(qtyToString(left)) : '0' };
   });
 }
 
@@ -122,7 +122,7 @@ export function grBody(po: PurchaseOrderDetail, typed: Record<number, string>, r
     const q = parseQty(raw);
     if (q === null || q <= 0) return fail(`"${i.description}": volume tidak terbaca (paling banyak 4 desimal).`);
     const left = (parseQty(i.qty) ?? 0) - (parseQty(i.qtyReceived) ?? 0);
-    if (q > left) return fail(`"${i.description}": melebihi sisa pesanan (${qtyInput(qtyToString(Math.max(0, left)))}).`);
+    if (q > left) return fail(`"${i.description}": melebihi sisa pesanan (${qtyText(qtyToString(Math.max(0, left)))}).`);
     items.push({ poItemId: i.id, qtyReceived: qtyToString(q) });
   }
   if (items.length === 0) return fail('Isi volume yang diterima pada minimal satu baris.');

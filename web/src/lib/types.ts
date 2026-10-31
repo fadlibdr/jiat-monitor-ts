@@ -449,3 +449,33 @@ export interface PoInput {
   siteId: number; vendorId: number; prId?: number; contractId?: number; orderDate: string; expectedDate?: string; note?: string; items: PoLineInput[];
 }
 export interface GrInput { receivedAt: string; note?: string; items: Array<{ poItemId: number; qtyReceived: string }> }
+
+// --- progress: plan, opname, S-curve (routes/progress.ts) ---
+
+export type ProgressStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+/** One opname report: a contract's cumulative progress at the end of one month (one per contract and month). */
+export interface ProgressReport {
+  id: number;
+  siteId: number;
+  contractId: number;
+  /** first day of the month */
+  period: string;
+  status: ProgressStatus;
+  note: string | null;
+}
+export interface ProgressItem {
+  id: number;
+  boqItemId: number;
+  /** the BOQ code: lines are matched to the current BOQ by code (a re-import gives new item ids) */
+  code: string;
+  qtyDone: string | null;
+  cumulativeMicroPct: number;
+}
+export interface ProgressReportDetail extends ProgressReport { items: ProgressItem[] }
+/** A stored plan point (GET answers one per leaf code and month). */
+export interface PlanEntry { code: string | null; period: string; plannedPct: number }
+export interface SCurvePctPoint { period: string; plannedPct: number; actualPct: number | null; deviationPct: number | null }
+/** GET …/s-curve: percent with 6 decimals; only approved reports count as actual */
+export interface SCurveData { points: SCurvePctPoint[]; latest: SCurvePctPoint | null }
+export interface OpnameLineInput { boqItemId: number; qtyDone?: string; cumulativePct?: number }
+export interface ProgressReportInput { contractId: number; period: string; note?: string }

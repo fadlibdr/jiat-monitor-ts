@@ -4,25 +4,29 @@ import { Shell, type NavItem } from '../components/Shell';
 import { ErrorNotice, Loading } from '../components/ui';
 import { api } from '../lib/api';
 import { currentMonthWib } from '../lib/format';
-import { APPROVE_ROLES, can, DASHBOARD_ROLES, EDIT_ROLES, FINANCE_ROLES, MANAGE_ROLES, MASTER_ROLES, REVIEW_ROLES, VENDOR_WRITE_ROLES } from '../lib/roles';
+import {
+  APPROVE_ROLES, can, DASHBOARD_ROLES, EDIT_ROLES, FINANCE_ROLES, MANAGE_ROLES, MASTER_ROLES, OPNAME_ROLES, PROGRESS_ROLES, REVIEW_ROLES, VENDOR_WRITE_ROLES,
+} from '../lib/roles';
 import { navigate } from '../lib/router';
 import { ROLE_LABEL } from '../lib/status';
 import { useAsync } from '../lib/useAsync';
 import type { CompanyRole, Me, MyCompany } from '../lib/types';
 import { IntakeReview } from './IntakeReview';
 import { Procurement } from './Procurement';
+import { Progress } from './Progress';
 import { ContractDetail } from './master/ContractDetail';
 import { Contracts } from './master/Contracts';
 import { Members } from './master/Members';
 import { Sites } from './master/Sites';
 import { Vendors } from './master/Vendors';
 
-export const COMPANY_VIEWS = ['home', 'intake', 'dashboard', 'procurement', 'contracts', 'sites', 'vendors', 'members'] as const;
+export const COMPANY_VIEWS = ['home', 'intake', 'dashboard', 'progress', 'procurement', 'contracts', 'sites', 'vendors', 'members'] as const;
 export type CompanyView = (typeof COMPANY_VIEWS)[number];
 
 const VIEW: Record<Exclude<CompanyView, 'home'>, { label: string; roles: readonly CompanyRole[] }> = {
   dashboard: { label: 'Dashboard perusahaan', roles: DASHBOARD_ROLES },
   intake: { label: 'Review nota', roles: REVIEW_ROLES },
+  progress: { label: 'Progres & opname', roles: PROGRESS_ROLES },
   procurement: { label: 'Pembelian', roles: MASTER_ROLES },
   contracts: { label: 'Kontrak', roles: MASTER_ROLES },
   sites: { label: 'Lokasi', roles: MASTER_ROLES },
@@ -37,7 +41,7 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
   const base = `/c/${company.id}`;
   const role = company.role;
   const item = (v: Exclude<CompanyView, 'home'>): NavItem[] => (can(role, VIEW[v].roles) ? [{ to: `${base}/${v}`, label: VIEW[v].label }] : []);
-  const work = [...item('dashboard'), ...item('intake'), ...item('procurement')];
+  const work = [...item('dashboard'), ...item('intake'), ...item('progress'), ...item('procurement')];
   const master = [...item('contracts'), ...item('sites'), ...item('vendors'), ...item('members')];
   const nav: Array<NavItem | { head: string }> = [
     { head: company.code }, ...work,
@@ -68,7 +72,7 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
       {!allowed && (
         <div className="notice">
           {role === 'site_staff'
-            ? 'Staf site mengirim foto nota dan opname lewat bot Telegram di grup lokasi. Belum ada layar web untuk peran ini.'
+            ? 'Staf site mengirim foto nota lewat bot Telegram di grup lokasi; di web, staf site mengisi opname di halaman Progres.'
             : 'Peran Anda tidak membuka halaman ini.'}
         </div>
       )}
@@ -77,6 +81,9 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
       {allowed && view === 'contracts' && (itemId
         ? <ContractDetail key={itemId} companyId={company.id} contractId={itemId} canEdit={can(role, EDIT_ROLES)} />
         : <Contracts companyId={company.id} canEdit={can(role, EDIT_ROLES)} />)}
+      {allowed && view === 'progress' && (
+        <Progress companyId={company.id} canReport={can(role, OPNAME_ROLES)} canPlan={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />
+      )}
       {allowed && view === 'procurement' && <Procurement companyId={company.id} canEdit={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />}
       {allowed && view === 'sites' && <Sites companyId={company.id} canEdit={can(role, EDIT_ROLES)} />}
       {allowed && view === 'vendors' && <Vendors companyId={company.id} canEdit={can(role, VENDOR_WRITE_ROLES)} seesPii={can(role, FINANCE_ROLES)} />}

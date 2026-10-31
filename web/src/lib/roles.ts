@@ -16,6 +16,10 @@ export const REVIEW_ROLES: readonly CompanyRole[] = ['project_admin', 'company_m
 export const DASHBOARD_ROLES = FINANCE_ROLES;
 /** vendor master: editors and finance write; bank account and NPWP only FINANCE_ROLES */
 export const VENDOR_WRITE_ROLES: readonly CompanyRole[] = ['project_admin', 'company_manager', 'system_admin', 'finance'];
+/** create, fill and submit an opname report: site staff too (they measure on site) */
+export const OPNAME_ROLES: readonly CompanyRole[] = ['site_staff', 'project_admin', 'company_manager', 'system_admin'];
+/** the progress screen (reading the plan, reports and S-curve): every company role */
+export const PROGRESS_ROLES: readonly CompanyRole[] = ['site_staff', 'project_admin', 'finance', 'company_manager', 'system_admin'];
 /** master-data screens (reading): every role with a web screen; site staff work through Telegram */
 export const MASTER_ROLES: readonly CompanyRole[] = ['project_admin', 'finance', 'company_manager', 'system_admin'];
 

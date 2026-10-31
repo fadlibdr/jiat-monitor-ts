@@ -35,7 +35,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
   const lk = lookups.data ?? { sites: [], vendors: [], contracts: [] };
   const siteName = (id: number) => lk.sites.find((s) => s.id === id)?.name ?? `#${id}`;
   const vendorName = (id: number) => lk.vendors.find((v) => v.id === id)?.name ?? `#${id}`;
-  const open = (p: Panel | undefined) => { setFlash(undefined); setPanel(p); };
+  const selectPanel = (p: Panel | undefined) => { setFlash(undefined); setPanel(p); };
 
   return (
     <>
@@ -46,13 +46,13 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
       <div className="review">
         <Card>
           <div className="tabs" role="tablist" aria-label="Dokumen">
-            <button type="button" role="tab" aria-selected={tab === 'pr'} onClick={() => { setTab('pr'); open(undefined); }}>Permintaan (PR)</button>
-            <button type="button" role="tab" aria-selected={tab === 'po'} onClick={() => { setTab('po'); open(undefined); }}>Pesanan (PO)</button>
+            <button type="button" role="tab" aria-selected={tab === 'pr'} onClick={() => { setTab('pr'); selectPanel(undefined); }}>Permintaan (PR)</button>
+            <button type="button" role="tab" aria-selected={tab === 'po'} onClick={() => { setTab('po'); selectPanel(undefined); }}>Pesanan (PO)</button>
           </div>
           <Notice note={flash} />
           {tab === 'pr' && (
             <>
-              {canEdit && <p><button type="button" className="btn" onClick={() => open({ kind: 'new-pr' })}>Buat PR</button></p>}
+              {canEdit && <p><button type="button" className="btn" onClick={() => selectPanel({ kind: 'new-pr' })}>Buat PR</button></p>}
               {prs.error && <ErrorNotice error={prs.error} onRetry={prs.reload} />}
               {prs.loading && !prs.data && <Loading what="PR" />}
               {prs.data && prs.data.length === 0 && <div className="empty">Belum ada permintaan pembelian.</div>}
@@ -63,7 +63,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
                     <tbody>
                       {prs.data.map((p) => (
                         <tr key={p.id} className={`selectable ${panel?.kind === 'pr' && panel.id === p.id ? 'selected' : ''}`} tabIndex={0}
-                          onClick={() => open({ kind: 'pr', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') open({ kind: 'pr', id: p.id }); }}>
+                          onClick={() => selectPanel({ kind: 'pr', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') selectPanel({ kind: 'pr', id: p.id }); }}>
                           <td className="code">{p.number}</td>
                           <td>{siteName(p.siteId)}</td>
                           <td>{dateLabel(p.neededBy)}</td>
@@ -78,7 +78,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
           )}
           {tab === 'po' && (
             <>
-              {canEdit && <p><button type="button" className="btn" onClick={() => open({ kind: 'new-po' })}>Buat PO</button></p>}
+              {canEdit && <p><button type="button" className="btn" onClick={() => selectPanel({ kind: 'new-po' })}>Buat PO</button></p>}
               {pos.error && <ErrorNotice error={pos.error} onRetry={pos.reload} />}
               {pos.loading && !pos.data && <Loading what="PO" />}
               {pos.data && pos.data.length === 0 && <div className="empty">Belum ada pesanan pembelian.</div>}
@@ -89,7 +89,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
                     <tbody>
                       {pos.data.map((p) => (
                         <tr key={p.id} className={`selectable ${panel?.kind === 'po' && panel.id === p.id ? 'selected' : ''}`} tabIndex={0}
-                          onClick={() => open({ kind: 'po', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') open({ kind: 'po', id: p.id }); }}>
+                          onClick={() => selectPanel({ kind: 'po', id: p.id })} onKeyDown={(e) => { if (e.key === 'Enter') selectPanel({ kind: 'po', id: p.id }); }}>
                           <td className="code">{p.number}</td>
                           <td>{vendorName(p.vendorId)}</td>
                           <td>{siteName(p.siteId)}</td>
@@ -116,7 +116,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
           )}
           {panel?.kind === 'pr' && (
             <PrDetail key={panel.id} companyId={companyId} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove}
-              onChanged={prs.reload} onMakePo={(pr) => { setTab('po'); open({ kind: 'new-po', from: poFormFromPr(pr, todayWib()) }); }} />
+              onChanged={prs.reload} onMakePo={(pr) => { setTab('po'); selectPanel({ kind: 'new-po', from: poFormFromPr(pr, todayWib()) }); }} />
           )}
           {panel?.kind === 'po' && (
             <PoDetail key={panel.id} companyId={companyId} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove} onChanged={() => { pos.reload(); prs.reload(); }} />
@@ -178,7 +178,7 @@ function LinesEditor({ lines, setLines, boqLeaves, priceLabel }: {
 
 function NewPr({ companyId, lk, onSaved }: { companyId: number; lk: Lookups; onSaved: (id: number, number: string) => void }) {
   const [form, setForm] = useState<PrForm>(() => ({ siteId: lk.sites.length === 1 ? String(lk.sites[0]!.id) : '', contractId: '', neededBy: '', note: '', lines: [emptyLine()] }));
-  const set = (k: 'siteId' | 'contractId' | 'neededBy' | 'note', v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setField = (k: 'siteId' | 'contractId' | 'neededBy' | 'note', v: string) => setForm((f) => ({ ...f, [k]: v }));
   const leaves = useBoqLeaves(companyId, form.contractId);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note>();
@@ -205,24 +205,24 @@ function NewPr({ companyId, lk, onSaved }: { companyId: number; lk: Lookups; onS
         <fieldset disabled={busy} className="plain">
           <div className="row2">
             <label className="field"><span>Lokasi</span>
-              <select value={form.siteId} onChange={(e) => { set('siteId', e.target.value); set('contractId', ''); }}>
+              <select value={form.siteId} onChange={(e) => { setField('siteId', e.target.value); setField('contractId', ''); }}>
                 <option value="">— pilih —</option>
                 {lk.sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>
             <label className="field"><span>Kontrak (untuk item BOQ)</span>
-              <select value={form.contractId} onChange={(e) => set('contractId', e.target.value)}>
+              <select value={form.contractId} onChange={(e) => setField('contractId', e.target.value)}>
                 <option value="">— tanpa kontrak —</option>
                 {contracts.map((k) => <option key={k.id} value={k.id}>{k.number}</option>)}
               </select>
             </label>
           </div>
           <label className="field"><span>Dibutuhkan tanggal</span>
-            <input type="date" value={form.neededBy} onChange={(e) => set('neededBy', e.target.value)} />
+            <input type="date" value={form.neededBy} onChange={(e) => setField('neededBy', e.target.value)} />
           </label>
           <LinesEditor lines={form.lines} setLines={(f) => setForm((x) => ({ ...x, lines: f(x.lines) }))} boqLeaves={leaves} priceLabel="Perkiraan harga" />
           <label className="field"><span>Catatan</span>
-            <input type="text" value={form.note} maxLength={2000} onChange={(e) => set('note', e.target.value)} />
+            <input type="text" value={form.note} maxLength={2000} onChange={(e) => setField('note', e.target.value)} />
           </label>
           <div className="actions"><button type="submit" className="btn primary">Simpan draf</button></div>
         </fieldset>
@@ -235,7 +235,7 @@ function NewPo({ companyId, lk, initial, onSaved }: { companyId: number; lk: Loo
   const [form, setForm] = useState<PoForm>(() => initial ?? {
     siteId: lk.sites.length === 1 ? String(lk.sites[0]!.id) : '', vendorId: '', contractId: '', orderDate: todayWib(), expectedDate: '', note: '', lines: [emptyLine()],
   });
-  const set = (k: 'siteId' | 'vendorId' | 'contractId' | 'orderDate' | 'expectedDate' | 'note', v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setField = (k: 'siteId' | 'vendorId' | 'contractId' | 'orderDate' | 'expectedDate' | 'note', v: string) => setForm((f) => ({ ...f, [k]: v }));
   const leaves = useBoqLeaves(companyId, form.contractId);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note>();
@@ -262,36 +262,36 @@ function NewPo({ companyId, lk, initial, onSaved }: { companyId: number; lk: Loo
         <fieldset disabled={busy} className="plain">
           <div className="row2">
             <label className="field"><span>Lokasi</span>
-              <select value={form.siteId} disabled={Boolean(initial?.prId)} onChange={(e) => { set('siteId', e.target.value); set('contractId', ''); }}>
+              <select value={form.siteId} disabled={Boolean(initial?.prId)} onChange={(e) => { setField('siteId', e.target.value); setField('contractId', ''); }}>
                 <option value="">— pilih —</option>
                 {lk.sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>
             <label className="field"><span>Vendor</span>
-              <select value={form.vendorId} onChange={(e) => set('vendorId', e.target.value)}>
+              <select value={form.vendorId} onChange={(e) => setField('vendorId', e.target.value)}>
                 <option value="">— pilih —</option>
                 {lk.vendors.filter((v) => v.status === 'active').map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </label>
           </div>
           <label className="field"><span>Kontrak (untuk item BOQ)</span>
-            <select value={form.contractId} onChange={(e) => set('contractId', e.target.value)}>
+            <select value={form.contractId} onChange={(e) => setField('contractId', e.target.value)}>
               <option value="">— tanpa kontrak —</option>
               {contracts.map((k) => <option key={k.id} value={k.id}>{k.number}</option>)}
             </select>
           </label>
           <div className="row2">
             <label className="field"><span>Tanggal PO</span>
-              <input type="date" value={form.orderDate} required onChange={(e) => set('orderDate', e.target.value)} />
+              <input type="date" value={form.orderDate} required onChange={(e) => setField('orderDate', e.target.value)} />
             </label>
             <label className="field"><span>Perkiraan kirim</span>
-              <input type="date" value={form.expectedDate} min={form.orderDate || undefined} onChange={(e) => set('expectedDate', e.target.value)} />
+              <input type="date" value={form.expectedDate} min={form.orderDate || undefined} onChange={(e) => setField('expectedDate', e.target.value)} />
             </label>
           </div>
           <LinesEditor lines={form.lines} setLines={(f) => setForm((x) => ({ ...x, lines: f(x.lines) }))} boqLeaves={leaves} priceLabel="Harga satuan" />
           <p className="small muted">Nilai PO dihitung server (volume × harga, PPN dari tarif PO); draf ini perlu disetujui manajer sebelum terbit.</p>
           <label className="field"><span>Catatan</span>
-            <input type="text" value={form.note} maxLength={2000} onChange={(e) => set('note', e.target.value)} />
+            <input type="text" value={form.note} maxLength={2000} onChange={(e) => setField('note', e.target.value)} />
           </label>
           <div className="actions"><button type="submit" className="btn primary">Simpan draf PO</button></div>
         </fieldset>
@@ -306,7 +306,7 @@ function PrDetail({ companyId, id, lk, canEdit, canApprove, onChanged, onMakePo 
   const pr = useAsync(() => api.purchaseRequest(companyId, id), [companyId, id]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note>();
-  const act = async (action: 'submit' | 'approve' | 'reject', done: string) => {
+  const runPrAction = async (action: 'submit' | 'approve' | 'reject', done: string) => {
     setBusy(true);
     setNote(undefined);
     try {
@@ -346,12 +346,12 @@ function PrDetail({ companyId, id, lk, canEdit, canApprove, onChanged, onMakePo 
           {d.note && <p className="small muted">{d.note}</p>}
           <div className="actions">
             {canEdit && (d.status === 'draft' || d.status === 'rejected') && (
-              <button type="button" className="btn primary" disabled={busy} onClick={() => void act('submit', 'PR diajukan untuk persetujuan.')}>Ajukan</button>
+              <button type="button" className="btn primary" disabled={busy} onClick={() => void runPrAction('submit', 'PR diajukan untuk persetujuan.')}>Ajukan</button>
             )}
             {canApprove && d.status === 'submitted' && (
               <>
-                <button type="button" className="btn primary" disabled={busy} onClick={() => void act('approve', 'PR disetujui.')}>Setujui</button>
-                <button type="button" className="btn danger" disabled={busy} onClick={() => void act('reject', 'PR ditolak.')}>Tolak</button>
+                <button type="button" className="btn primary" disabled={busy} onClick={() => void runPrAction('approve', 'PR disetujui.')}>Setujui</button>
+                <button type="button" className="btn danger" disabled={busy} onClick={() => void runPrAction('reject', 'PR ditolak.')}>Tolak</button>
               </>
             )}
             {canEdit && d.status === 'approved' && <button type="button" className="btn primary" onClick={() => onMakePo(d)}>Buat PO dari PR ini</button>}
@@ -370,7 +370,7 @@ function PoDetail({ companyId, id, lk, canEdit, canApprove, onChanged }: {
   const receipts = useAsync(() => api.goodsReceipts(companyId, id), [companyId, id]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note>();
-  const act = async (action: 'approve' | 'cancel', done: string) => {
+  const runPoAction = async (action: 'approve' | 'cancel', done: string) => {
     if (action === 'cancel' && !window.confirm('Batalkan PO ini? Komitmen anggarannya dilepas.')) return;
     setBusy(true);
     setNote(undefined);
@@ -412,8 +412,8 @@ function PoDetail({ companyId, id, lk, canEdit, canApprove, onChanged }: {
           </div>
           <p className="small">DPP {rupiah(d.dppCents)} · PPN {rupiah(d.ppnCents)} · <b>Total {rupiah(d.totalCents)}</b></p>
           <div className="actions">
-            {canApprove && d.status === 'draft' && <button type="button" className="btn primary" disabled={busy} onClick={() => void act('approve', 'PO disetujui dan terbit.')}>Setujui &amp; terbitkan</button>}
-            {canApprove && (d.status === 'draft' || d.status === 'issued') && <button type="button" className="btn danger" disabled={busy} onClick={() => void act('cancel', 'PO dibatalkan.')}>Batalkan</button>}
+            {canApprove && d.status === 'draft' && <button type="button" className="btn primary" disabled={busy} onClick={() => void runPoAction('approve', 'PO disetujui dan terbit.')}>Setujui &amp; terbitkan</button>}
+            {canApprove && (d.status === 'draft' || d.status === 'issued') && <button type="button" className="btn danger" disabled={busy} onClick={() => void runPoAction('cancel', 'PO dibatalkan.')}>Batalkan</button>}
           </div>
           {!canApprove && d.status === 'draft' && <p className="small muted">Menunggu persetujuan manajer.</p>}
           {canReceive && (
