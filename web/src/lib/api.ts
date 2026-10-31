@@ -2,6 +2,7 @@ import type {
   Addendum, BoqImportSummary, BoqItem, BoqVersion, Category, CompanyRole, Contract, ContractDetail, ContractTerm, HoldingDashboard,
   HoldingRefresh, IntakePage, IntakePatch, IntakeRow, IntakeStatus, Me, Member, MyCompany, Panels, Site, TelegramLink, Vendor,
   AddendumInput, ContractInput, ContractPatch, SiteInput, VendorInput, VendorPatch,
+  GoodsReceipt, GrInput, PoInput, PoStatus, PrInput, PurchaseOrder, PurchaseOrderDetail, PurchaseRequest, PurchaseRequestDetail,
 } from './types';
 import { errorMessage } from './errors';
 
@@ -26,14 +27,14 @@ export function setUnauthorizedHandler(fn: () => void): void {
 }
 
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
   // same origin: the session cookie is httpOnly and goes along by itself; nothing is kept in JS.
   // A FormData body (file upload) sets its own multipart content type.
   const form = body instanceof FormData;
   const res = await fetch(path, {
     method,
     credentials: 'same-origin',
-    headers: body === undefined || form ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
+    headers: { accept: 'application/json', ...(body === undefined || form ? {} : { 'content-type': 'application/json' }), ...extraHeaders },
     ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }),
   });
   if (res.status === 401) onUnauthorized();
@@ -114,6 +115,27 @@ export const api = {
     body.set('file', file);
     return request<{ data: BoqImportSummary }>('POST', `/companies/${companyId}/contracts/${contractId}/boq/import${qs({ sheet })}`, body).then((r) => r.data);
   },
+  purchaseRequests: (companyId: number) => request<{ data: PurchaseRequest[] }>('GET', `/companies/${companyId}/purchase-requests`).then((r) => r.data),
+  purchaseRequest: (companyId: number, id: number) =>
+    request<{ data: PurchaseRequestDetail }>('GET', `/companies/${companyId}/purchase-requests/${id}`).then((r) => r.data),
+  createPr: (companyId: number, body: PrInput) => request<{ data: PurchaseRequestDetail }>('POST', `/companies/${companyId}/purchase-requests`, body).then((r) => r.data),
+  /** submit: admins; approve / reject: managers */
+  prAction: (companyId: number, id: number, action: 'submit' | 'approve' | 'reject') =>
+    request<{ data: PurchaseRequest }>('POST', `/companies/${companyId}/purchase-requests/${id}/${action}`, {}).then((r) => r.data),
+  purchaseOrders: (companyId: number) => request<{ data: PurchaseOrder[] }>('GET', `/companies/${companyId}/purchase-orders`).then((r) => r.data),
+  purchaseOrder: (companyId: number, id: number) =>
+    request<{ data: PurchaseOrderDetail }>('GET', `/companies/${companyId}/purchase-orders/${id}`).then((r) => r.data),
+  createPo: (companyId: number, body: PoInput) => request<{ data: PurchaseOrderDetail }>('POST', `/companies/${companyId}/purchase-orders`, body).then((r) => r.data),
+  /** approve (draft → issued) or cancel (only without receipts): managers */
+  poAction: (companyId: number, id: number, action: 'approve' | 'cancel') =>
+    request<{ data: PurchaseOrder }>('POST', `/companies/${companyId}/purchase-orders/${id}/${action}`, {}).then((r) => r.data),
+  /** the key makes a resubmitted form return the first receipt instead of receiving twice */
+  receive: (companyId: number, poId: number, body: GrInput, idempotencyKey: string) =>
+    request<{ data: GoodsReceipt & { poStatus: PoStatus } }>('POST', `/companies/${companyId}/purchase-orders/${poId}/receipts`, body, { 'idempotency-key': idempotencyKey })
+      .then((r) => r.data),
+  goodsReceipts: (companyId: number, poId: number) =>
+    request<{ data: GoodsReceipt[] }>('GET', `/companies/${companyId}/goods-receipts${qs({ poId })}`).then((r) => r.data),
+
   setBoqCategory: (companyId: number, contractId: number, itemId: number, category: Category | null) =>
     request<{ data: BoqItem }>('PATCH', `/companies/${companyId}/contracts/${contractId}/boq/items/${itemId}`, { category }).then((r) => r.data),
 

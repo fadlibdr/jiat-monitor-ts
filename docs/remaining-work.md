@@ -218,14 +218,17 @@ pilot-priority order:
 4. [x] **Master data:** sites, contracts, termin, addendum, BOQ import with its summary and errors, members. Also vendors
    (bank and NPWP only for finance and managers) and per-item cost categories. Rupiah fields use the server's own parser.
    *Open:* reading the plan (time schedule) from the RAB workbook; system-admin screens (companies, users, Telegram groups).
-5. [ ] **PR/PO/GR forms and approvals.**
+5. [x] **PR/PO/GR forms and approvals.** PR with lines (optionally tied to BOQ items), submit / approve / reject; PO from an
+   approved PR or blank, issue or cancel; goods receipts per line with an `Idempotency-Key` per form. Quantities and line
+   totals use the server's own code (`src/domain/quantity.ts`). *Open:* PO edit before approval, printing a PO.
 6. [ ] **Opname entry and approval, S-curve plan entry.**
 7. [ ] **Invoicing and payments.**
 8. [x] **Company dashboard** (the same panels, live; finance and managers only, LLD §4).
 
-Checked in Chromium against PostgreSQL 16, 23 steps: sign-in, wrong password, picker, review and confirm, a site, a
+Checked in Chromium against PostgreSQL 16, 25 steps: sign-in, wrong password, picker, review and confirm, a site, a
 contract, its termin, a refused and a good RAB import, a category fix, an addendum, vendor bank data (and finance's view),
-members, sign-out, holding dashboard, refresh, 390 px screen. No console errors, no 5xx. Not yet automated in CI (it
+a PR submitted and approved, a PO from it issued and partly received (an over-receipt refused), members, sign-out,
+holding dashboard, refresh, 390 px screen. No console errors, no 5xx. Not yet automated in CI (it
 needs a browser and Postgres).
 
 ### 4.11 Test plan coverage (LLD §10)

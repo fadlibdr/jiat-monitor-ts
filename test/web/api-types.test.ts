@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { Panels as ServerPanels } from '../../src/dashboard/panels.js';
 import type { VendorInvoiceRow } from '../../src/intake/review.js';
 import type { ImportSummary } from '../../src/boq/importer.js';
-import type { boqItems, boqVersions, contractAddendums, contractTerms, sites, vendors } from '../../src/db/schema.js';
+import type { boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, sites, vendors } from '../../src/db/schema.js';
+import type { getPo, getPr } from '../../src/procurement/service.js';
 import type { withEffective } from '../../src/http/routes/company.js';
 import type {
-  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, IntakeRow, Panels, Site, Vendor,
+  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, PurchaseOrderDetail,
+  PurchaseRequestDetail, Site, Vendor,
 } from '../../web/src/lib/types.js';
 
 /**
@@ -28,9 +30,14 @@ const addendum: Assignable<typeof contractAddendums.$inferSelect, Addendum> = tr
 const boqVersion: Assignable<typeof boqVersions.$inferSelect, BoqVersion> = true;
 const boqItem: Assignable<typeof boqItems.$inferSelect, BoqItem> = true;
 const importSummary: Assignable<ImportSummary, BoqImportSummary> = true;
+/** procurement: what getPr / getPo answer, and the receipt rows */
+const prDetail: Assignable<Awaited<ReturnType<typeof getPr>>, PurchaseRequestDetail> = true;
+const poDetail: Assignable<Awaited<ReturnType<typeof getPo>>, PurchaseOrderDetail> = true;
+const receipt: Assignable<typeof goodsReceipts.$inferSelect, GoodsReceipt> = true;
 
 describe('web API types follow the server', () => {
   it('compiles (the check is the assignment above)', () => {
-    expect([dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary]).toEqual(Array(10).fill(true));
+    expect([dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary, prDetail, poDetail, receipt])
+      .toEqual(Array(13).fill(true));
   });
 });

@@ -8,6 +8,8 @@ import type { CompanyRole } from './types.js';
 export const EDIT_ROLES: readonly CompanyRole[] = ['project_admin', 'company_manager', 'system_admin'];
 export const FINANCE_ROLES: readonly CompanyRole[] = ['finance', 'company_manager', 'system_admin'];
 export const MANAGE_ROLES: readonly CompanyRole[] = ['company_manager', 'system_admin'];
+/** approve / reject a PR, approve or cancel a PO (HLD §2: the company manager) */
+export const APPROVE_ROLES: readonly CompanyRole[] = ['company_manager', 'system_admin'];
 /** intake review list: editors and finance (finance reads only) */
 export const REVIEW_ROLES: readonly CompanyRole[] = ['project_admin', 'company_manager', 'system_admin', 'finance'];
 /** company dashboard (LLD §4) */
