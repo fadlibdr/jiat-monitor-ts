@@ -14,6 +14,8 @@ const Phone = z.string().max(30).regex(/^\+?[0-9 -]{6,30}$/);
 const Npwp = z.string().regex(/^\d{15,16}$/);
 const BankName = z.string().trim().min(1).max(100);
 const BankAccount = z.string().regex(/^[0-9-]{5,40}$/);
+/** 0 = cash on delivery; a year is the longest term a supplier gives */
+const PaymentTermsDays = z.number().int().min(0).max(365);
 
 const VendorBody = z.object({
   name: Name,
@@ -22,6 +24,7 @@ const VendorBody = z.object({
   bankAccount: BankAccount.optional(),
   phone: Phone.optional(),
   defaultCategory: z.enum(CATEGORIES).optional(),
+  paymentTermsDays: PaymentTermsDays.optional(),
   status: z.enum(VENDOR_STATUSES).default('active'),
 });
 const VendorPatch = z.object({
@@ -31,6 +34,7 @@ const VendorPatch = z.object({
   bankAccount: BankAccount.nullable().optional(),
   phone: Phone.nullable().optional(),
   defaultCategory: z.enum(CATEGORIES).nullable().optional(),
+  paymentTermsDays: PaymentTermsDays.nullable().optional(),
   status: z.enum(VENDOR_STATUSES).optional(),
 }).refine((b) => Object.keys(b).length > 0, 'body kosong');
 const VendorParams = z.object({ companyId: IdParam, vendorId: IdParam });

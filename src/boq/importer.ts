@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
+import { categoryFromDescription, type Category } from '../domain/categories.js';
 import { effectiveContract } from '../domain/contract.js';
 import { centsToDecimalString, type Cents } from '../domain/money.js';
 import { boqItems, boqVersions, contractAddendums, contracts } from '../db/schema.js';
@@ -33,7 +34,9 @@ export interface ImportOptions {
  * looked up through RLS, so a contract of another company simply does not exist here (SEC-AUTHZ).
  */
 export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: ImportOptions = {}): Promise<ImportSummary> {
-  const contract = await tx.query.contracts.findFirst({ where: eq(contracts.id, contractId) });
+  // the contract row is the BOQ's lock: a category correction (PATCH …/boq/items/:id) takes it too,
+  // so it either lands before this import reads the categories to carry over, or after it, on the new version
+  const [contract] = await tx.select().from(contracts).where(eq(contracts.id, contractId)).for('no key update');
   if (!contract) throw new BoqImportError('Kontrak tidak ditemukan pada perusahaan aktif.', 'foreign_contract', { contractId });
   // an addendum normally comes with a revised RAB: the BOQ must match the DPP in force, not the original
   const addendums = await tx.select().from(contractAddendums).where(eq(contractAddendums.contractId, contract.id));
@@ -66,6 +69,13 @@ export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: I
     if (!it.isLeaf) continue;
     for (let p = it.parentIdx; p !== null; p = rolled[p]!.parentIdx) rolled[p]!.weight += rolled[k]!.weight;
   }
+
+  // categories: what the previous version had per code (a manual choice survives a re-import), else
+  // the item's own description, else the nearest section's (cost-by-category panels, §4.3)
+  const previous = await tx.select({ code: boqItems.code, category: boqItems.category }).from(boqItems)
+    .innerJoin(boqVersions, eq(boqVersions.id, boqItems.versionId))
+    .where(and(eq(boqVersions.contractId, contract.id), eq(boqVersions.isCurrent, true)));
+  const categories = itemCategories(rolled, new Map(previous.filter((p) => p.category).map((p) => [p.code, p.category!])));
 
   // new version; previous current version is kept (B3), only its flag flips
   const [agg] = await tx
@@ -106,6 +116,7 @@ export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: I
         unitPriceCents: it.unitPriceCents,
         amountCents: it.amountCents,
         weightMicroPct: it.weight,
+        category: categories[k] ?? null,
         level: it.level,
         isLeaf: it.isLeaf,
         sortOrder: k,
@@ -115,6 +126,23 @@ export async function importBoq(tx: Tx, contractId: number, file: Buffer, opt: I
   }
 
   return { versionId: version.id, version: version.version, ...base };
+}
+
+/**
+ * Category per item (index-aligned): kept from the previous BOQ version by code; else the item's
+ * own description (whole-word keywords, null when ambiguous); else inherited from the nearest
+ * section that has one. A heuristic — a BOQ work item mixes material, labour and equipment — so it
+ * can be corrected per item (PATCH …/boq/items/:itemId) and the correction survives re-imports.
+ */
+export function itemCategories(
+  items: ReadonlyArray<{ code: string; description: string; parentIdx: number | null }>,
+  previousByCode: ReadonlyMap<string, Category>,
+): Array<Category | null> {
+  const out: Array<Category | null> = [];
+  items.forEach((it, k) => {
+    out[k] = previousByCode.get(it.code) ?? categoryFromDescription(it.description) ?? (it.parentIdx === null ? null : out[it.parentIdx] ?? null);
+  });
+  return out;
 }
 
 /**

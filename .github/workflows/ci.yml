@@ -35,3 +35,27 @@ jobs:
             git status --porcelain drizzle
             exit 1
           fi
+
+  # The SPA (web/, its own package and lockfile): strict typecheck + production build. The pure
+  # helpers it shares with the server (web/src/lib) are tested by the root suite above.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: No inline script in the built shell (the CSP allows none)
+        run: |
+          if grep -Eq '<script>|<script [^>]*>[^<]' dist/index.html; then
+            echo "::error::dist/index.html has an inline script; the server's CSP (script-src 'self') would block it"
+            exit 1
+          fi

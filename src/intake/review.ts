@@ -1,9 +1,9 @@
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import type { Category } from '../domain/categories.js';
 import type { Cents } from '../domain/money.js';
-import { arithPpnFails, dateOutOfRange } from '../domain/receipt-validator.js';
+import { arithPpnFails, dateOutOfRange, DEFAULT_TOLERANCE_CENTS } from '../domain/receipt-validator.js';
 import { usableVendorName } from '../domain/vendor-name.js';
-import { sites, vendorInvoices, vendors, type IntakeReview, type VendorInvoiceStatus } from '../db/schema.js';
+import { payments, sites, vendorInvoices, vendors, type IntakeReview, type VendorInvoiceStatus } from '../db/schema.js';
 import type { Tx } from '../db/tenant.js';
 import { vendorForName } from './vendors.js';
 
@@ -18,7 +18,12 @@ export type Change =
   | { field: 'vendorId'; value: number }
   | { field: 'invoiceDate'; value: string }
   | { field: 'docNumber'; value: string }
+  /** null = cleared: a confirmed nota then falls back to its nota date + the vendor's payment term */
+  | { field: 'dueDate'; value: string | null }
   | { field: 'status'; value: 'terkonfirmasi' | 'ditolak' };
+
+/** Payment term when the vendor has none (vendors.payment_terms_days): 30 days, the usual "net 30". */
+export const DEFAULT_PAYMENT_TERMS_DAYS = 30;
 
 /** chat = staff in the group; admin = project admin on the review screen (has seen photo + candidates). */
 export type Channel = 'chat' | 'admin';
@@ -113,6 +118,7 @@ async function applyInSavepoint(
       case 'totalCents': next.totalCents = ch.value; break;
       case 'invoiceDate': next.invoiceDate = ch.value; break;
       case 'docNumber': next.docNumber = ch.value; break;
+      case 'dueDate': next.dueDate = ch.value; break;
       case 'vendorName': {
         const name = usableVendorName(ch.value);
         if (!name) throw new Refused({ ok: false, reason: 'invalid_value', detail: 'nama vendor tidak valid', row: current });
@@ -132,6 +138,17 @@ async function applyInSavepoint(
         break;
       }
       case 'status': wantStatus = ch.value; break;
+    }
+  }
+  if (next.dueDate && next.invoiceDate && next.dueDate < next.invoiceDate) {
+    throw new Refused({ ok: false, reason: 'invalid_value', detail: 'jatuh tempo sebelum tanggal nota', row: current });
+  }
+  // a paid (or partly paid) invoice cannot be corrected below what was already paid out
+  if (next.totalCents !== current.totalCents && current.status === 'terkonfirmasi') {
+    const [paid] = await tx.select({ sum: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
+      .where(and(eq(payments.payableType, 'vendor_invoices'), eq(payments.payableId, current.id)));
+    if (next.totalCents < Number(paid!.sum)) {
+      throw new Refused({ ok: false, reason: 'invalid_value', detail: `total lebih kecil dari yang sudah dibayar (${Number(paid!.sum)} sen)`, row: current });
     }
   }
 
@@ -167,13 +184,41 @@ async function applyInSavepoint(
     next.confirmedAt = new Date();
     next.confirmedBy = ctx.userId;
   }
+  // payables are overdue from the due date (LLD §8 "Vendor overdue"): a confirmed nota always has one.
+  // None given, or cleared on the review screen (also after confirmation) = nota date + vendor term.
+  if (next.status === 'terkonfirmasi' && !next.dueDate && next.invoiceDate) {
+    const [v] = next.vendorId
+      ? await tx.select({ days: vendors.paymentTermsDays }).from(vendors).where(eq(vendors.id, next.vendorId))
+      : [];
+    next.dueDate = addDays(next.invoiceDate, v?.days ?? DEFAULT_PAYMENT_TERMS_DAYS);
+  }
+  if (next.status === 'terkonfirmasi') Object.assign(next, trustedSplit(next));
 
   const [row] = await tx.update(vendorInvoices).set({
     vendorId: next.vendorId, vendorName: next.vendorName, invoiceDate: next.invoiceDate, docNumber: next.docNumber,
-    category: next.category, totalCents: next.totalCents, status: next.status, confidence: next.confidence,
-    confirmedAt: next.confirmedAt, confirmedBy: next.confirmedBy,
+    category: next.category, totalCents: next.totalCents, dppCents: next.dppCents, ppnCents: next.ppnCents, dueDate: next.dueDate,
+    status: next.status, confidence: next.confidence, confirmedAt: next.confirmedAt, confirmedBy: next.confirmedBy,
   }).where(eq(vendorInvoices.id, current.id)).returning();
   return { ok: true, row: row! };
+}
+
+/**
+ * The DPP of a CONFIRMED nota (realised cost against the BOQ budget is DPP). Its total is the truth
+ * (a person checked it against the photo); an OCR subtotal that does not add up to it with the PPN —
+ * typically the total was corrected and the subtotal was misread too — is not used: DPP is cleared
+ * and cost falls back to total − PPN. While the row is open the split stays, so arith_ppn keeps
+ * telling the reviewer to look.
+ */
+export function trustedSplit(row: { totalCents: Cents; dppCents: Cents | null; ppnCents: Cents | null }): { dppCents: Cents | null; ppnCents: Cents | null } {
+  const { dppCents: dpp, ppnCents: ppn } = row;
+  if (dpp === null || Math.abs(dpp + (ppn ?? 0) - row.totalCents) <= DEFAULT_TOLERANCE_CENTS) return { dppCents: dpp, ppnCents: ppn };
+  return { dppCents: null, ppnCents: ppn !== null && ppn < row.totalCents ? ppn : null };
+}
+
+function addDays(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }
 
 function pgCode(err: unknown): string | undefined {

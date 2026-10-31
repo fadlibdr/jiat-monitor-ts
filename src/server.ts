@@ -4,6 +4,7 @@ import { betterAuthAuthenticator, createAuth } from './auth/better-auth.js';
 import { createDb, DatabaseUnavailable } from './db/client.js';
 import { createApp } from './http/app.js';
 import { LocalDiskStorage } from './intake/storage.js';
+import { createLogger } from './log.js';
 
 const Env = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL harus diisi (lihat .env.example).'),
@@ -18,8 +19,12 @@ const Env = z.object({
   AUTH_TRUSTED_PROXIES: z.string().default(''),
   /** compared with X-Telegram-Bot-Api-Secret-Token; unset = webhook off (404) */
   TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/, 'TELEGRAM_WEBHOOK_SECRET: 32–256 karakter A-Z a-z 0-9 _ -').optional(),
+  /** the bot's @username without "@": POST /me/telegram-link then returns a t.me/<bot>?start=<code> link */
+  TELEGRAM_BOT_USERNAME: z.string().regex(/^[A-Za-z0-9_]{5,32}$/, 'TELEGRAM_BOT_USERNAME: 5–32 karakter A-Z a-z 0-9 _').optional(),
   /** folder of original intake photos (same as the worker's) */
   STORAGE_DIR: z.string().min(1).optional(),
+  /** the built browser UI (npm --prefix web run build), served under /app/; missing → API only */
+  WEB_DIST_DIR: z.string().min(1).default('web/dist'),
   NODE_ENV: z.string().default('development'),
 });
 
@@ -38,15 +43,17 @@ async function main(): Promise<void> {
     ...(env.AUTH_RATE_LIMIT ? { rateLimit: env.AUTH_RATE_LIMIT === '1' } : {}),
     trustedProxies: env.AUTH_TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean),
   });
+  const log = createLogger({ service: 'api' });
   const app = createApp({
-    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins,
+    db, auth: betterAuthAuthenticator(auth), betterAuth: auth, trustedOrigins, log, webDistDir: env.WEB_DIST_DIR,
     ...(env.STORAGE_DIR ? { storage: new LocalDiskStorage(env.STORAGE_DIR) } : {}),
     ...(env.TELEGRAM_WEBHOOK_SECRET ? { telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET } : {}),
+    ...(env.TELEGRAM_BOT_USERNAME ? { telegramBotUsername: env.TELEGRAM_BOT_USERNAME } : {}),
   });
-  const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => console.log(`JIAT Monitor API on :${info.port}`));
+  const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => log('api_started', { port: info.port }));
 
   const shutdown = (sig: string) => {
-    console.log(`${sig}: menutup server…`);
+    log('api_stopping', { signal: sig });
     server.close(() => void close().finally(() => process.exit(0)));
   };
   process.on('SIGINT', () => shutdown('SIGINT'));

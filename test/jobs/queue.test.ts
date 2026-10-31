@@ -167,4 +167,12 @@ describe('errorText', () => {
     const wrapped = new Error('Failed query: insert into "vendor_invoices" … params: 12345,secret', { cause: pg });
     expect(errorText(wrapped)).toBe('Error: value too long for type character varying(100)');
   });
+
+  it('keeps every entry of an AggregateError (which company failed, and why), each by its innermost cause', () => {
+    const one = new Error('company 3', { cause: new Error('Failed query: select … params: secret', { cause: new RangeError('Maximum call stack size exceeded') }) });
+    const two = new Error('company 7', { cause: new Error('deadlock detected') });
+    const text = errorText(new AggregateError([one, two], 'digest gagal untuk 2 dari 5 perusahaan'));
+    expect(text).toBe('AggregateError: digest gagal untuk 2 dari 5 perusahaan [company 3: RangeError: Maximum call stack size exceeded; company 7: Error: deadlock detected]');
+    expect(text).not.toContain('secret');
+  });
 });

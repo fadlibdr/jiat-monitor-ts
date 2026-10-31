@@ -6,6 +6,7 @@ import { withApp, withCompany, type Db } from '../../db/tenant.js';
 import { CORRECTION_MAX_ATTEMPTS, JOB_CORRECTION, JOB_PHOTO, PHOTO_MAX_ATTEMPTS } from '../../intake/pipeline.js';
 import { classifyUpdate } from '../../intake/telegram-update.js';
 import { enqueue } from '../../jobs/queue.js';
+import { redeemLinkCode, START_COMMAND } from '../../ops/telegram-link.js';
 import type { App } from '../context.js';
 
 /**
@@ -17,8 +18,9 @@ import type { App } from '../context.js';
  *  - unknown or inactive chat → 200, nothing stored (LLD §8)
  *  - text that is not a correction → 200, nothing stored (the group stays quiet, chat text is not kept)
  *  - same (chat_id, message_id) again → 200, no second job (unique index, ON CONFLICT DO NOTHING)
+ *  - a private chat with the bot: only "/start <code>" (account linking) is acted on
  */
-export function registerTelegramWebhook(app: App, { db, secret }: { db: Db; secret: string | undefined }): void {
+export function registerTelegramWebhook(app: App, { db, secret, now }: { db: Db; secret: string | undefined; now: () => Date }): void {
   app.post('/telegram/webhook', async (c) => {
     if (!secret) return c.json({ error: 'not_found' }, 404);
     if (!secretMatches(c.req.header('x-telegram-bot-api-secret-token'), secret)) return c.json({ error: 'forbidden' }, 403);
@@ -31,6 +33,12 @@ export function registerTelegramWebhook(app: App, { db, secret }: { db: Db; secr
     }
     const msg = classifyUpdate(update);
     if (!msg) return c.body(null, 200);
+    // in a private chat the chat id is the sender's user id; groups have negative ids
+    if (msg.fromId !== null && msg.chatId === msg.fromId) {
+      const code = msg.kind === 'text' ? START_COMMAND.exec(msg.text.trim())?.[1] : undefined;
+      if (code) await redeemLinkCode(db, code, msg.fromId, now());
+      return c.body(null, 200);
+    }
     if (msg.kind === 'text' && !parseCorrection(msg.text, msg.replyToBot)) return c.body(null, 200);
 
     const chat = await withApp(db, (tx) => tx.query.telegramChats.findFirst({

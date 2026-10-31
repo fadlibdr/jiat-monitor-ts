@@ -1,0 +1,6 @@
+# crontab of the deploy user (crontab -e). Server clock in WIB (Asia/Jakarta); on a UTC clock use 0 18 * * *.
+# BackupDatabase (LLD §9) 01:00 WIB: pg_dump with its own role, 30-day retention. The password of
+# jiat_backup is in ~/.pgpass (chmod 600) — never in this file.
+# The other scheduled jobs (dashboard refresh, DailyDigest, purge) run inside the worker, not here.
+CRON_TZ=Asia/Jakarta
+0 1 * * *  BACKUP_DATABASE_URL=postgres://jiat_backup@127.0.0.1:5432/jiat BACKUP_DIR=/var/backups/jiat /opt/jiat/scripts/backup-db.sh >> /var/log/jiat/backup.log 2>&1
