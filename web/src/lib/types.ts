@@ -374,3 +374,78 @@ export interface AddendumInput {
   endDateNew?: string;
   note?: string;
 }
+
+// --- procurement (PR → PO → GR) ---
+
+export type PrStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'closed';
+export type PoStatus = 'draft' | 'issued' | 'partial' | 'received' | 'cancelled';
+
+export interface PurchaseRequest {
+  id: number;
+  siteId: number;
+  contractId: number | null;
+  number: string;
+  neededBy: string | null;
+  status: PrStatus;
+  note: string | null;
+}
+
+export interface PrItem {
+  id: number;
+  boqItemId: number | null;
+  description: string;
+  /** numeric(18,4) text, e.g. "12.5000" */
+  qty: string;
+  unit: string | null;
+  estPriceCents: number | null;
+}
+
+export interface PurchaseRequestDetail extends PurchaseRequest { items: PrItem[] }
+
+export interface PurchaseOrder {
+  id: number;
+  siteId: number;
+  vendorId: number;
+  prId: number | null;
+  contractId: number | null;
+  number: string;
+  orderDate: string;
+  expectedDate: string | null;
+  ppnRateBp: number;
+  dppCents: number;
+  ppnCents: number;
+  totalCents: number;
+  status: PoStatus;
+  note: string | null;
+}
+
+export interface PoItem {
+  id: number;
+  prItemId: number | null;
+  boqItemId: number | null;
+  description: string;
+  qty: string;
+  unit: string | null;
+  unitPriceCents: number;
+  amountCents: number;
+  /** Σ goods receipts so far, numeric text */
+  qtyReceived: string;
+}
+
+export interface PurchaseOrderDetail extends PurchaseOrder { items: PoItem[] }
+
+export interface GoodsReceipt {
+  id: number;
+  poId: number;
+  number: string;
+  receivedAt: string;
+  note: string | null;
+}
+
+export interface PrLineInput { boqItemId?: number; description: string; qty: string; unit?: string; estPriceCents?: number }
+export interface PrInput { siteId: number; contractId?: number; neededBy?: string; note?: string; items: PrLineInput[] }
+export interface PoLineInput { boqItemId?: number; prItemId?: number; description: string; qty: string; unit?: string; unitPriceCents: number }
+export interface PoInput {
+  siteId: number; vendorId: number; prId?: number; contractId?: number; orderDate: string; expectedDate?: string; note?: string; items: PoLineInput[];
+}
+export interface GrInput { receivedAt: string; note?: string; items: Array<{ poItemId: number; qtyReceived: string }> }
