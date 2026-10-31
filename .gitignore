@@ -5,3 +5,8 @@ dist/
 !.env.example
 *.log
 coverage/
+
+# plugin runtime state (rewritten every session; never committed)
+/.clawness/sessions.json
+/.clawness/guard_sessions.json
+.cto-toolkit/learning/
