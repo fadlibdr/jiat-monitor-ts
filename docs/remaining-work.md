@@ -220,7 +220,8 @@ pilot-priority order:
    *Open:* reading the plan (time schedule) from the RAB workbook; system-admin screens (companies, users, Telegram groups).
 5. [x] **PR/PO/GR forms and approvals.** PR with lines (optionally tied to BOQ items), submit / approve / reject; PO from an
    approved PR or blank, issue or cancel; goods receipts per line with an `Idempotency-Key` per form. Quantities and line
-   totals use the server's own code (`src/domain/quantity.ts`). *Open:* PO edit before approval, printing a PO.
+   totals use the server's own code (`src/domain/quantity.ts`). An issued PO prints for the vendor (A4, total in
+   words, two signature lines; see item 7). *Open:* PO edit before approval.
 6. [x] **Opname entry and approval, S-curve plan entry.** Per contract: the S-curve (plan vs approved opname), the monthly
    reports, and the plan. Site staff and admins fill a month (cumulative volume per BOQ leaf, or % for a leaf without a
    volume; matched to the current BOQ by code) and submit; managers approve or reject. Admins and managers edit the plan:
@@ -233,8 +234,10 @@ pilot-priority order:
    one issued from approved progress (refused out of order or below its trigger, with the reason shown first). Invoice
    detail: the server's DPP − uang muka − retensi + PPN, its payments and balance, a payment form with one
    `Idempotency-Key` per form (an over-payment refused before sending), cancel while unpaid. Receivables by aging bucket,
-   unpaid confirmed vendor notas with the same payment form. *Open:* printing / PDF of an invoice, editing a payment,
-   a single-invoice GET (the detail reads the list).
+   unpaid confirmed vendor notas with the same payment form. A live invoice prints as an A4 sheet with the total in
+   words (`lib/terbilang.ts`): the browser's own print with a print stylesheet (`components/PrintSheet.tsx`), so
+   "Save as PDF" gives the PDF and no PDF library is added. *Open:* editing a payment, a single-invoice GET (the detail
+   reads the list), a company letterhead (address, NPWP, bank account) on the printed sheets.
 8. [x] **Company dashboard** (the same panels, live; finance and managers only, LLD §4).
 
 Checked in Chromium against PostgreSQL 16, 29 steps: sign-in, wrong password, picker, review and confirm, a site, a

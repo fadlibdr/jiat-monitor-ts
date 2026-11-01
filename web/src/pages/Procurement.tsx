@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { PrintButton } from '../components/PrintSheet';
 import { Card, ErrorNotice, Loading, Pill } from '../components/ui';
 import { api } from '../lib/api';
 import { dateLabel, qtyLabel, rupiah, todayWib } from '../lib/format';
@@ -6,6 +7,7 @@ import { emptyLine, grBody, lineTotalCents, poBody, poFormFromPr, prBody, receip
 import { useAsync } from '../lib/useAsync';
 import type { Contract, PoStatus, PrStatus, PurchaseOrderDetail, PurchaseRequestDetail, Site, Vendor } from '../lib/types';
 import { errorNote, Notice, type Note } from './master/common';
+import { PoSheet } from './printDocs';
 
 const PR_LABEL: Record<PrStatus, string> = { draft: 'Draf', submitted: 'Diajukan', approved: 'Disetujui', rejected: 'Ditolak', closed: 'Sudah jadi PO' };
 const PR_TONE: Record<PrStatus, 'plain' | 'amber' | 'green' | 'red'> = { draft: 'plain', submitted: 'amber', approved: 'green', rejected: 'red', closed: 'plain' };
@@ -19,7 +21,7 @@ type Panel = { kind: 'new-pr' } | { kind: 'new-po'; from?: PoForm } | { kind: 'p
  * PR → PO → GR (HLD §4). Admins write and receive; managers approve a PR, approve (issue) or cancel a
  * PO. Amounts and "more than ordered" use the server's own quantity code (lib/procurement.ts).
  */
-export function Procurement({ companyId, canEdit, canApprove }: { companyId: number; canEdit: boolean; canApprove: boolean }) {
+export function Procurement({ companyId, companyName, canEdit, canApprove }: { companyId: number; companyName: string; canEdit: boolean; canApprove: boolean }) {
   const [tab, setTab] = useState<'pr' | 'po'>('pr');
   const [panel, setPanel] = useState<Panel>();
   const [flash, setFlash] = useState<Note>();
@@ -116,7 +118,7 @@ export function Procurement({ companyId, canEdit, canApprove }: { companyId: num
               onChanged={prs.reload} onMakePo={(pr) => { setTab('po'); selectPanel({ kind: 'new-po', from: poFormFromPr(pr, todayWib()) }); }} />
           )}
           {panel?.kind === 'po' && (
-            <PoDetail key={panel.id} companyId={companyId} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove} onChanged={() => { pos.reload(); prs.reload(); }} />
+            <PoDetail key={panel.id} companyId={companyId} companyName={companyName} id={panel.id} lk={lk} canEdit={canEdit} canApprove={canApprove} onChanged={() => { pos.reload(); prs.reload(); }} />
           )}
         </div>
       </div>
@@ -360,8 +362,8 @@ function PrDetail({ companyId, id, lk, canEdit, canApprove, onChanged, onMakePo 
   );
 }
 
-function PoDetail({ companyId, id, lk, canEdit, canApprove, onChanged }: {
-  companyId: number; id: number; lk: Lookups; canEdit: boolean; canApprove: boolean; onChanged: () => void;
+function PoDetail({ companyId, companyName, id, lk, canEdit, canApprove, onChanged }: {
+  companyId: number; companyName: string; id: number; lk: Lookups; canEdit: boolean; canApprove: boolean; onChanged: () => void;
 }) {
   const po = useAsync(() => api.purchaseOrder(companyId, id), [companyId, id]);
   const receipts = useAsync(() => api.goodsReceipts(companyId, id), [companyId, id]);
@@ -409,10 +411,16 @@ function PoDetail({ companyId, id, lk, canEdit, canApprove, onChanged }: {
           </div>
           <p className="small">DPP {rupiah(d.dppCents)} · PPN {rupiah(d.ppnCents)} · <b>Total {rupiah(d.totalCents)}</b></p>
           <div className="actions">
+            {/* a draft is not an order yet: only an issued PO is printed for the vendor */}
+            {d.status !== 'draft' && d.status !== 'cancelled' && <PrintButton label="Cetak PO" />}
             {canApprove && d.status === 'draft' && <button type="button" className="btn primary" disabled={busy} onClick={() => void runPoAction('approve', 'PO disetujui dan terbit.')}>Setujui &amp; terbitkan</button>}
             {canApprove && (d.status === 'draft' || d.status === 'issued') && <button type="button" className="btn danger" disabled={busy} onClick={() => void runPoAction('cancel', 'PO dibatalkan.')}>Batalkan</button>}
           </div>
           {!canApprove && d.status === 'draft' && <p className="small muted">Menunggu persetujuan manajer.</p>}
+          {d.status !== 'draft' && d.status !== 'cancelled' && (
+            <PoSheet po={d} companyName={companyName} vendorName={lk.vendors.find((v) => v.id === d.vendorId)?.name ?? `#${d.vendorId}`}
+              siteName={lk.sites.find((s) => s.id === d.siteId)?.name ?? `#${d.siteId}`} />
+          )}
           {canReceive && (
             <ReceiveForm key={`${d.id}:${d.status}:${receipts.data?.length ?? 0}`} companyId={companyId} po={d}
               onReceived={(number) => { setNote({ tone: 'ok', text: `Penerimaan ${number} disimpan.` }); po.reload(); receipts.reload(); onChanged(); }} />

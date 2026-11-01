@@ -218,3 +218,25 @@ tr.section td { font-weight: 600; background: var(--bg, #f7f7f5); }
 .flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* print sheets (components/PrintSheet.tsx): hidden on screen; when printing, only the sheet shows */
+.print-sheet { display: none; }
+@media print {
+  @page { size: A4; margin: 16mm 18mm; }
+  body { background: #fff; }
+  #root { display: none !important; }
+  .print-sheet { display: block; color: #000; font: 10.5pt/1.45 var(--sans); }
+  .print-sheet h1 { font-size: 15pt; margin: 1mm 0 5mm; text-transform: uppercase; letter-spacing: 0.04em; }
+  .ps-company { font-weight: 600; font-size: 12pt; }
+  .ps-meta { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 1.5mm 4mm; margin: 0 0 6mm; }
+  .ps-meta dt { color: #444; }
+  .ps-meta dd { margin: 0; }
+  .print-sheet table { width: 100%; border-collapse: collapse; }
+  .print-sheet th, .print-sheet td { border-bottom: 0.5pt solid #888; padding: 1.6mm 2mm; text-align: left; vertical-align: top; }
+  .print-sheet th { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.04em; }
+  .print-sheet .num { text-align: right; white-space: nowrap; }
+  .ps-total td { font-weight: 700; border-top: 1pt solid #000; }
+  .ps-words { margin: 4mm 0; }
+  .ps-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 10mm; margin-top: 12mm; break-inside: avoid; }
+  .ps-line { margin-top: 20mm; }
+}
