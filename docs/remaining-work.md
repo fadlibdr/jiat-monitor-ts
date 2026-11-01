@@ -225,8 +225,10 @@ pilot-priority order:
    reports, and the plan. Site staff and admins fill a month (cumulative volume per BOQ leaf, or % for a leaf without a
    volume; matched to the current BOQ by code) and submit; managers approve or reject. Admins and managers edit the plan:
    contract-level rows (blank code = every leaf) and per-item rows; a plan stored identically for every leaf comes back
-   as one row per month. Site staff now have a web screen. *Open:* a per-item plan above 500 rows is not editable here
-   (shown on the curve, replaced whole by a save); the latest approved figure per item is not shown beside the input.
+   as one row per month. Site staff now have a web screen. Each item shows its last approved figure before the month
+   (the server's floor, re-based on the current BOQ volume), and a lower value is refused before sending. *Open:* a
+   per-item plan above 500 rows is not editable here (shown on the curve, replaced whole by a save); the ceiling of a
+   back-dated month (a later month already approved) is still only checked by the server.
 7. [x] **Invoicing and payments** (finance and managers). Per contract the termin with reached / invoiced, and the next
    one issued from approved progress (refused out of order or below its trigger, with the reason shown first). Invoice
    detail: the server's DPP − uang muka − retensi + PPN, its payments and balance, a payment form with one
