@@ -1,7 +1,8 @@
+import { mulDiv } from '../../../src/domain/contract.js';
 import { parseQty, qtyToString } from '../../../src/domain/quantity.js';
 import type { Built } from './master.js';
 import { qtyText } from './procurement.js';
-import type { BoqItem, CurvePoint, OpnameLineInput, PlanEntry, ProgressItem, SCurveData } from './types.js';
+import type { BoqItem, CurvePoint, OpnameLineInput, PlanEntry, ProgressItem, ProgressReportDetail, SCurveData } from './types.js';
 
 /**
  * Plan and opname forms → request bodies. Progress is cumulative per BOQ leaf; the API stores it as
@@ -73,17 +74,40 @@ export function opnameRows(items: readonly BoqItem[], saved: readonly ProgressIt
   });
 }
 
-/** The cumulative percent a row stands for (shown beside a volume), micro-percent; null while unreadable. */
+/** The cumulative percent a row stands for, micro-percent, rounded as the server does (mulDiv); null while unreadable. */
 export function rowMicro(r: OpnameRow): number | null {
   const raw = r.value.trim();
   if (!raw) return null;
   if (r.mode === 'pct') return parsePctMicro(raw);
   const q = parseQty(raw);
-  return q === null || q < 0 || r.total === null ? null : Math.round((q * MICRO_100) / r.total);
+  return q === null || r.total === null || q > r.total ? null : mulDiv(q, MICRO_100, r.total);
 }
 
-/** Rows with a value (empty = not reported); a volume above the BOQ's is refused here (the API would too). */
-export function opnameBody(rows: readonly OpnameRow[]): Built<OpnameLineInput[]> {
+/** The lowest cumulative progress an item may report this month: its last approved figure before it. */
+export interface Floor { micro: number; period: string }
+
+/**
+ * Per code, the closest approved report before this month that has a line for it — the server's floor
+ * (approvedByCode(…, 'latest') in src/progress/service.ts). A line given as a volume is re-based on the
+ * CURRENT BOQ volume (currentMicro there), so an addendum that adds volume lowers the floor accordingly.
+ */
+export function approvedFloors(before: ReadonlyArray<Pick<ProgressReportDetail, 'period' | 'items'>>, items: readonly BoqItem[]): Map<string, Floor> {
+  const volume = new Map(items.filter((i) => i.isLeaf).map((l) => [l.code, l.qty === null ? null : parseQty(l.qty)]));
+  const out = new Map<string, Floor>();
+  for (const r of [...before].sort((a, b) => b.period.localeCompare(a.period))) {
+    for (const it of r.items) {
+      if (out.has(it.code)) continue;
+      const done = it.qtyDone === null ? null : parseQty(it.qtyDone);
+      const vol = volume.get(it.code);
+      const micro = done === null || !vol ? it.cumulativeMicroPct : Math.min(MICRO_100, mulDiv(done, MICRO_100, vol));
+      out.set(it.code, { micro, period: r.period });
+    }
+  }
+  return out;
+}
+
+/** Rows with a value (empty = not reported); a volume above the BOQ's, or below the approved floor, is refused here (the API would too). */
+export function opnameBody(rows: readonly OpnameRow[], floors: ReadonlyMap<string, Floor> = new Map()): Built<OpnameLineInput[]> {
   const out: OpnameLineInput[] = [];
   for (const r of rows) {
     const raw = r.value.trim();
@@ -97,6 +121,11 @@ export function opnameBody(rows: readonly OpnameRow[]): Built<OpnameLineInput[]>
       const micro = parsePctMicro(raw);
       if (micro === null) return fail(`${r.code}: progres 0–100 %, paling banyak 6 desimal.`);
       out.push({ boqItemId: r.boqItemId, cumulativePct: micro / MICRO_PER_PCT });
+    }
+    const floor = floors.get(r.code);
+    const micro = rowMicro(r);
+    if (floor && micro !== null && micro < floor.micro) {
+      return fail(`${r.code}: progres ${pctText(micro)}% turun dari ${pctText(floor.micro)}% yang disetujui ${floor.period.slice(0, 7)}.`);
     }
   }
   if (out.length === 0) return fail('Isi progres minimal satu item.');

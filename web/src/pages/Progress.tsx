@@ -2,9 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { SCurve } from '../components/SCurve';
 import { Card, ErrorNotice, Loading, Pill } from '../components/ui';
 import { api } from '../lib/api';
-import { currentMonthWib, monthLong, percentMicro, points, qtyLabel } from '../lib/format';
+import { currentMonthWib, monthLabel, monthLong, percentMicro, points, qtyLabel } from '../lib/format';
 import {
-  curvePoints, nextMonth, opnameBody, opnameRows, planRowsOf, rowMicro, scheduleBody, type OpnameRow, type PlanRow,
+  approvedFloors, curvePoints, nextMonth, opnameBody, opnameRows, planRowsOf, rowMicro, scheduleBody, type Floor, type OpnameRow, type PlanRow,
 } from '../lib/progress';
 import { useAsync } from '../lib/useAsync';
 import type { BoqItem, Contract, ProgressReport, ProgressStatus } from '../lib/types';
@@ -119,7 +119,7 @@ function ContractProgress({ companyId, contract, canReport, canPlan, canApprove 
             onSaved={(r) => { reports.reload(); setPanel({ kind: 'report', id: r.id }); setFlash({ tone: 'ok', text: `Laporan ${monthLong(r.period)} dibuat (draf). Isi progres per item, lalu ajukan.` }); }} />
         )}
         {panel?.kind === 'report' && boq.data && (
-          <ReportDetail key={panel.id} companyId={companyId} id={panel.id} items={items} canReport={canReport} canApprove={canApprove}
+          <ReportDetail key={panel.id} companyId={companyId} id={panel.id} items={items} reports={reports.data ?? []} canReport={canReport} canApprove={canApprove}
             onChanged={() => { setFlash(undefined); reports.reload(); curve.reload(); }} />
         )}
         {panel?.kind === 'plan' && boq.data && (
@@ -178,18 +178,32 @@ function NewReport({ companyId, contractId, existing, onOpen, onSaved }: {
   );
 }
 
-function ReportDetail({ companyId, id, items, canReport, canApprove, onChanged }: {
-  companyId: number; id: number; items: readonly BoqItem[]; canReport: boolean; canApprove: boolean; onChanged: () => void;
+function ReportDetail({ companyId, id, items, reports, canReport, canApprove, onChanged }: {
+  companyId: number; id: number; items: readonly BoqItem[]; reports: readonly ProgressReport[]; canReport: boolean; canApprove: boolean; onChanged: () => void;
 }) {
   const report = useAsync(() => api.progressReport(companyId, id), [companyId, id]);
   const d = report.data;
+  // approved months before this one, newest first; read until every leaf has its floor (usually one)
+  const before = d ? reports.filter((r) => r.status === 'approved' && r.period < d.period).map((r) => r.id).join(',') : null;
+  const floors = useAsync(async () => {
+    if (!d) return new Map<string, Floor>();
+    const leaves = items.filter((i) => i.isLeaf).length;
+    const ids = reports.filter((r) => r.status === 'approved' && r.period < d.period).sort((a, b) => b.period.localeCompare(a.period)).map((r) => r.id);
+    const read = [];
+    for (const rid of ids) {
+      read.push(await api.progressReport(companyId, rid));
+      if (approvedFloors(read, items).size >= leaves) break;
+    }
+    return approvedFloors(read, items);
+  }, [companyId, before, items]);
   return (
     <Card title={d ? `Opname ${monthLong(d.period)}` : 'Laporan opname'}>
       {report.error && <ErrorNotice error={report.error} onRetry={report.reload} />}
+      {floors.error && <ErrorNotice error={floors.error} onRetry={floors.reload} />}
       {report.loading && !d && <Loading what="laporan" />}
       {d && (
         <OpnameEditor companyId={companyId} id={id} status={d.status} note={d.note}
-          initial={opnameRows(items, d.items)} canReport={canReport} canApprove={canApprove}
+          initial={opnameRows(items, d.items)} floors={floors.data ?? new Map()} canReport={canReport} canApprove={canApprove}
           onChanged={() => { report.reload(); onChanged(); }} />
       )}
     </Card>
@@ -197,8 +211,9 @@ function ReportDetail({ companyId, id, items, canReport, canApprove, onChanged }
 }
 
 /** Mounted once the report is loaded, so typing is never overwritten by a reload after saving. */
-function OpnameEditor({ companyId, id, status, note: reportNote, initial, canReport, canApprove, onChanged }: {
-  companyId: number; id: number; status: ProgressStatus; note: string | null; initial: OpnameRow[]; canReport: boolean; canApprove: boolean; onChanged: () => void;
+function OpnameEditor({ companyId, id, status, note: reportNote, initial, floors, canReport, canApprove, onChanged }: {
+  companyId: number; id: number; status: ProgressStatus; note: string | null; initial: OpnameRow[]; floors: ReadonlyMap<string, Floor>;
+  canReport: boolean; canApprove: boolean; onChanged: () => void;
 }) {
   const [rows, setRows] = useState(initial);
   const [dirty, setDirty] = useState(false);
@@ -214,7 +229,7 @@ function OpnameEditor({ companyId, id, status, note: reportNote, initial, canRep
   /** save (when changed), then the workflow action, as one click */
   const run = async (action: 'save' | 'submit' | 'approve' | 'reject') => {
     setNote(undefined);
-    const built = action === 'save' || (action === 'submit' && dirty) ? opnameBody(rows) : null;
+    const built = action === 'save' || (action === 'submit' && dirty) ? opnameBody(rows, floors) : null;
     if (built && !built.ok) { setNote({ tone: 'error', text: built.error }); return; }
     setBusy(true);
     try {
@@ -251,6 +266,11 @@ function OpnameEditor({ companyId, id, status, note: reportNote, initial, canRep
                 <td>
                   <span className="code">{r.code}</span> {r.description}
                   <div className="small muted">{r.qty === null ? 'diisi dalam %' : `volume BOQ ${qtyLabel(r.qty)} ${r.unit ?? ''}`}</div>
+                  {floors.get(r.code) && (
+                    <div className={`small ${(rowMicro(r) ?? Infinity) < floors.get(r.code)!.micro ? 't-red' : 'muted'}`}>
+                      disetujui {monthLabel(floors.get(r.code)!.period)}: {percentMicro(floors.get(r.code)!.micro)}
+                    </div>
+                  )}
                 </td>
                 <td className="num">
                   {editable

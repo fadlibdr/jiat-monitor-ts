@@ -5,7 +5,7 @@ import { parseQty } from '../../src/domain/quantity.js';
 import { MICRO_100, pctToMicro } from '../../src/domain/scurve.js';
 import { OPNAME_ROLES as S_OPNAME } from '../../src/http/context.js';
 import {
-  curvePoints, nextMonth, opnameBody, opnameRows, parsePctMicro, pctText, PLAN_ROWS_EDITABLE, planRowsOf, rowMicro, scheduleBody, type OpnameRow,
+  approvedFloors, curvePoints, nextMonth, opnameBody, opnameRows, parsePctMicro, pctText, PLAN_ROWS_EDITABLE, planRowsOf, rowMicro, scheduleBody, type OpnameRow,
 } from '../../web/src/lib/progress.js';
 import { OPNAME_ROLES, PROGRESS_ROLES } from '../../web/src/lib/roles.js';
 import type { BoqItem, PlanEntry } from '../../web/src/lib/types.js';
@@ -89,6 +89,34 @@ describe('opname form', () => {
     expect(opnameBody(rows.map((r) => (r.code === '1.1' ? { ...r, value: '151' } : r)))).toEqual({ ok: false, error: '1.1: 151 melebihi volume BOQ 150.' });
     expect(opnameBody(rows.map((r) => (r.code === '1.2' ? { ...r, value: '101' } : r))).ok).toBe(false);
     expect(opnameBody(rows.map((r) => ({ ...r, value: '' })))).toEqual({ ok: false, error: 'Isi progres minimal satu item.' });
+  });
+});
+
+describe('approved floor', () => {
+  const items = [leaf(1, '1.1', '150.0000'), leaf(2, '1.2', null)];
+  const reportOf = (period: string, lines: Array<[string, string | null, number]>) => ({
+    period, items: lines.map(([code, qtyDone, micro], i) => ({ id: i, boqItemId: i, code, qtyDone, cumulativeMicroPct: micro })),
+  });
+
+  it('per code the closest approved month before; a volume re-based on the current BOQ (as the server does)', () => {
+    const floors = approvedFloors([
+      reportOf('2026-05-01', [['1.1', '40.0000', 40_000_000], ['1.2', null, 10_000_000]]), // stored when the volume was 100
+      reportOf('2026-08-01', [['1.1', '80.0000', 80_000_000]]), // 1.2 not measured in August
+    ], items);
+    // 80 of the old 100 is 53,33 % of the current 150 (an addendum added volume), as currentMicro computes it
+    expect(floors.get('1.1')).toEqual({ micro: mulDiv(800_000, MICRO_100, 1_500_000), period: '2026-08-01' });
+    expect(floors.get('1.2')).toEqual({ micro: 10_000_000, period: '2026-05-01' });
+    expect(approvedFloors([], items).size).toBe(0);
+  });
+
+  it('a value below the floor is refused before sending; equal to it is fine', () => {
+    const floors = approvedFloors([reportOf('2026-08-01', [['1.1', '80.0000', 0], ['1.2', null, 25_500_000]])], items);
+    const rows = opnameRows(items, []);
+    const set = (v1: string, v2: string) => rows.map((r) => ({ ...r, value: r.code === '1.1' ? v1 : v2 }));
+    expect(opnameBody(set('79', '30'), floors)).toEqual({ ok: false, error: '1.1: progres 52,666667% turun dari 53,333333% yang disetujui 2026-08.' });
+    expect(opnameBody(set('80', '25,4'), floors)).toEqual({ ok: false, error: '1.2: progres 25,4% turun dari 25,5% yang disetujui 2026-08.' });
+    expect(opnameBody(set('80', '25,5'), floors).ok).toBe(true);
+    expect(opnameBody(set('79', ''), new Map()).ok).toBe(true); // no approved month: no floor
   });
 });
 
