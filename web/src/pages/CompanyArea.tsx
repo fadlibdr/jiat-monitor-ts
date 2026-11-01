@@ -86,8 +86,8 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
       {allowed && view === 'progress' && (
         <Progress companyId={company.id} canReport={can(role, OPNAME_ROLES)} canPlan={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />
       )}
-      {allowed && view === 'invoicing' && <Invoicing companyId={company.id} />}
-      {allowed && view === 'procurement' && <Procurement companyId={company.id} canEdit={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />}
+      {allowed && view === 'invoicing' && <Invoicing companyId={company.id} companyName={company.name} />}
+      {allowed && view === 'procurement' && <Procurement companyId={company.id} companyName={company.name} canEdit={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />}
       {allowed && view === 'sites' && <Sites companyId={company.id} canEdit={can(role, EDIT_ROLES)} />}
       {allowed && view === 'vendors' && <Vendors companyId={company.id} canEdit={can(role, VENDOR_WRITE_ROLES)} seesPii={can(role, FINANCE_ROLES)} />}
       {allowed && view === 'members' && <Members companyId={company.id} canManage={can(role, MANAGE_ROLES)} />}

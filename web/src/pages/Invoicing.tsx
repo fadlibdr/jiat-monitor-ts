@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { PrintButton } from '../components/PrintSheet';
 import { Card, ErrorNotice, Loading, Pill } from '../components/ui';
 import { api } from '../lib/api';
 import { dateLabel, percentBp, percentMicro, rupiah, todayWib } from '../lib/format';
@@ -9,6 +10,7 @@ import {
 import { useAsync, type AsyncState } from '../lib/useAsync';
 import type { AgingBucket, Contract, Payment, PaymentMethod, SalesInvoice, Site } from '../lib/types';
 import { errorNote, Notice, type Note } from './master/common';
+import { InvoiceSheet } from './printDocs';
 
 type Tab = 'termin' | 'tagihan' | 'piutang' | 'hutang';
 type Panel = { kind: 'invoice'; id: number } | { kind: 'payable'; rowId: string };
@@ -20,7 +22,7 @@ const TABS: Array<[Tab, string]> = [['termin', 'Termin'], ['tagihan', 'Tagihan']
  * Termin invoices to the employer, payments in and out, aging (HLD §4, §7). Finance and managers only
  * (every money endpoint is FINANCE_ROLES). Amounts are the server's; the screen never computes one.
  */
-export function Invoicing({ companyId }: { companyId: number }) {
+export function Invoicing({ companyId, companyName }: { companyId: number; companyName: string }) {
   const [tab, setTab] = useState<Tab>('termin');
   const [panel, setPanel] = useState<Panel>();
   const [flash, setFlash] = useState<Note>();
@@ -94,7 +96,7 @@ export function Invoicing({ companyId }: { companyId: number }) {
         <div className="detail">
           {!panel && <Card><div className="empty">{tab === 'hutang' ? 'Pilih nota vendor untuk membayar.' : 'Pilih tagihan untuk melihat rincian dan pembayaran.'}</div></Card>}
           {panel?.kind === 'invoice' && (
-            <InvoiceDetail key={panel.id} companyId={companyId} id={panel.id} invoice={invoices} contractNo={contractNo}
+            <InvoiceDetail key={panel.id} companyId={companyId} companyName={companyName} id={panel.id} invoice={invoices} contracts={lk.contracts} contractNo={contractNo}
               onChanged={(text) => { invoices.reload(); if (text) setFlash({ tone: 'ok', text }); }} />
           )}
           {panel?.kind === 'payable' && (
@@ -204,8 +206,9 @@ function TermsOfContract({ companyId, contractId, onIssued }: {
 }
 
 /** `invoice` comes from the page's list (there is no single-invoice GET); onChanged reloads that list. */
-function InvoiceDetail({ companyId, id, invoice, contractNo, onChanged }: {
-  companyId: number; id: number; invoice: AsyncState<SalesInvoice[]>; contractNo: (id: number) => string; onChanged: (text?: string) => void;
+function InvoiceDetail({ companyId, companyName, id, invoice, contracts, contractNo, onChanged }: {
+  companyId: number; companyName: string; id: number; invoice: AsyncState<SalesInvoice[]>; contracts: readonly Contract[];
+  contractNo: (id: number) => string; onChanged: (text?: string) => void;
 }) {
   const pays = useAsync(() => api.payments(companyId, 'sales_invoices', id), [companyId, id]);
   const [busy, setBusy] = useState(false);
@@ -256,11 +259,13 @@ function InvoiceDetail({ companyId, id, invoice, contractNo, onChanged }: {
             <PaymentFormView companyId={companyId} target={{ payableType: 'sales_invoices', rowRef: id }} balanceCents={balance} label="Catat pembayaran masuk"
               onPaid={(text) => { pays.reload(); onChanged(text); }} />
           )}
-          {cancellable(d) && (
+          {d.status !== 'cancelled' && (
             <div className="actions">
-              <button type="button" className="btn danger" disabled={busy} onClick={() => void cancel()}>Batalkan tagihan</button>
+              <PrintButton label="Cetak tagihan" />
+              {cancellable(d) && <button type="button" className="btn danger" disabled={busy} onClick={() => void cancel()}>Batalkan tagihan</button>}
             </div>
           )}
+          {d.status !== 'cancelled' && <InvoiceSheet invoice={d} companyName={companyName} contract={contracts.find((k) => k.id === d.contractId)} />}
         </>
       )}
     </Card>
