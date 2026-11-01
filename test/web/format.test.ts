@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseIdrCents } from '../../src/domain/money.js';
 import {
   amountPlain, currentMonthWib, dateLabel, groupThousands, instantLabel, miliar, minutesLabel, monthIndex, monthLabel, monthLong, monthShort,
-  percentBp, percentMicro, periodOfIndex, points, rupiah, rupiahShort, shortRef,
+  percentBp, percentMicro, periodOfIndex, points, rupiah, rupiahShort, shortRef, todayWib,
 } from '../../web/src/lib/format.js';
 
 const MINUS = '−';
@@ -111,6 +111,11 @@ describe('web format: dates', () => {
   it('takes the current month in WIB, not UTC', () => {
     expect(currentMonthWib(new Date('2026-10-31T18:00:00Z'))).toBe('2026-11');
     expect(currentMonthWib(new Date('2026-10-31T16:59:00Z'))).toBe('2026-10');
+  });
+
+  it('takes today in WIB (UTC+7), so a late-evening entry is not dated yesterday', () => {
+    expect(todayWib(new Date('2026-10-31T17:00:00Z'))).toBe('2026-11-01');
+    expect(todayWib(new Date('2026-10-31T16:59:59Z'))).toBe('2026-10-31');
   });
 
   it('prints durations as hours and minutes', () => {

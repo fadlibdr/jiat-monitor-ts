@@ -4,6 +4,7 @@ import type {
   AddendumInput, ContractInput, ContractPatch, SiteInput, VendorInput, VendorPatch,
   GoodsReceipt, GrInput, PoInput, PoStatus, PrInput, PurchaseOrder, PurchaseOrderDetail, PurchaseRequest, PurchaseRequestDetail,
   OpnameLineInput, PlanEntry, ProgressReport, ProgressReportDetail, ProgressReportInput, SCurveData,
+  AgingBucket, Payable, PayableType, Payment, PaymentInput, Receivable, SalesInvoice, TermsStatus,
 } from './types';
 import { errorMessage } from './errors';
 
@@ -157,6 +158,28 @@ export const api = {
   /** submit: site staff and admins; approve / reject: managers */
   progressAction: (companyId: number, id: number, action: 'submit' | 'approve' | 'reject') =>
     request<{ data: ProgressReport }>('POST', `/companies/${companyId}/progress-reports/${id}/${action}`, {}).then((r) => r.data),
+
+  /** which termin are reached (approved progress) and already invoiced */
+  termsStatus: (companyId: number, contractId: number) =>
+    request<{ data: TermsStatus }>('GET', `/companies/${companyId}/contracts/${contractId}/terms/status`).then((r) => r.data),
+  /** the server computes every amount; refused out of order, below the trigger, or twice */
+  issueTermInvoice: (companyId: number, body: { contractId: number; termId: number; invoiceDate: string }) =>
+    request<{ data: SalesInvoice }>('POST', `/companies/${companyId}/invoices/sales/from-term`, body).then((r) => r.data),
+  salesInvoices: (companyId: number, contractId?: number) =>
+    request<{ data: SalesInvoice[] }>('GET', `/companies/${companyId}/invoices/sales${qs({ contractId })}`).then((r) => r.data),
+  /** only an unpaid invoice, and only the latest live termin of its contract */
+  cancelSalesInvoice: (companyId: number, id: number) =>
+    request<{ data: SalesInvoice }>('POST', `/companies/${companyId}/invoices/sales/${id}/cancel`, {}).then((r) => r.data),
+  /** the key makes a resubmitted form return the first payment instead of paying twice */
+  recordPayment: (companyId: number, body: PaymentInput, idempotencyKey: string) =>
+    request<{ data: Payment & { balanceCents: number; replayed: boolean } }>('POST', `/companies/${companyId}/payments`, body, { 'idempotency-key': idempotencyKey })
+      .then((r) => r.data),
+  payments: (companyId: number, payableType: PayableType, rowRef: number | string) =>
+    request<{ data: Payment[] }>('GET', `/companies/${companyId}/payments${qs({ payableType, rowRef })}`).then((r) => r.data),
+  receivables: (companyId: number) =>
+    request<{ data: Receivable[]; totals: { balanceCents: number; buckets: Record<AgingBucket, number> } }>('GET', `/companies/${companyId}/receivables`),
+  payables: (companyId: number) =>
+    request<{ data: Payable[]; totals: { balanceCents: number; overdueCents: number } }>('GET', `/companies/${companyId}/payables`),
 
   setBoqCategory: (companyId: number, contractId: number, itemId: number, category: Category | null) =>
     request<{ data: BoqItem }>('PATCH', `/companies/${companyId}/contracts/${contractId}/boq/items/${itemId}`, { category }).then((r) => r.data),

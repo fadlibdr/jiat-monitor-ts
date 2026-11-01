@@ -479,3 +479,54 @@ export interface SCurvePctPoint { period: string; plannedPct: number; actualPct:
 export interface SCurveData { points: SCurvePctPoint[]; latest: SCurvePctPoint | null }
 export interface OpnameLineInput { boqItemId: number; qtyDone?: string; cumulativePct?: number }
 export interface ProgressReportInput { contractId: number; period: string; note?: string }
+
+// --- invoicing and payments (routes/finance.ts) ---
+
+/** A termin with whether approved progress reached its trigger and whether it has a live invoice. */
+export interface TermStatus extends ContractTerm { invoiceNumber: string | null; reached: boolean; invoiced: boolean }
+export interface TermsStatus { actualMicroPct: number; terms: TermStatus[] }
+export type SalesInvoiceStatus = 'issued' | 'partial' | 'paid' | 'cancelled';
+/** A termin invoice to the employer; amounts are computed and frozen by the server at issue. */
+export interface SalesInvoice {
+  id: number;
+  siteId: number;
+  contractId: number;
+  termId: number;
+  number: string;
+  invoiceDate: string;
+  dueDate: string;
+  /** approved weighted progress when issued */
+  progressMicroPct: number;
+  dppCents: number;
+  advanceDeductionCents: number;
+  retentionCents: number;
+  ppnCents: number;
+  totalCents: number;
+  status: SalesInvoiceStatus;
+}
+export type PayableType = 'sales_invoices' | 'vendor_invoices';
+export type PaymentMethod = 'transfer' | 'tunai' | 'giro' | 'lain';
+export interface Payment {
+  id: number;
+  siteId: number;
+  payableType: PayableType;
+  /** the paid document: a sales invoice id, or a vendor invoice row_id */
+  rowRef: number | string | null;
+  paidAt: string;
+  amountCents: number;
+  method: PaymentMethod;
+  reference: string | null;
+  note: string | null;
+}
+export type PaymentInput = {
+  paidAt: string; amountCents: number; method: PaymentMethod; reference?: string; note?: string;
+} & ({ payableType: 'sales_invoices'; rowRef: number } | { payableType: 'vendor_invoices'; rowRef: string });
+export type AgingBucket = 'd0_30' | 'd31_60' | 'd61_90' | 'd90p';
+export interface Receivable {
+  id: number; number: string; siteId: number; contractId: number; invoiceDate: string; dueDate: string;
+  totalCents: number; balanceCents: number; ageDays: number; bucket: AgingBucket;
+}
+export interface Payable {
+  rowId: string; siteId: number; vendorId: number | null; vendorName: string | null; invoiceDate: string | null; dueDate: string | null;
+  totalCents: number; balanceCents: number; overdue: boolean;
+}

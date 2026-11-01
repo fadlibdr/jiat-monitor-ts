@@ -139,6 +139,11 @@ export function currentMonthWib(now: Date = new Date()): string {
   return new Date(now.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 7);
 }
 
+/** Today in WIB as "YYYY-MM-DD" (the default of every date field: invoice, payment, order, receipt) */
+export function todayWib(now: Date = new Date()): string {
+  return new Date(now.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 /** 220 → "3 j 40 m"; 45 → "45 m"; null → "—" */
 export function minutesLabel(min: number | null | undefined): string {
   if (min === null || min === undefined) return '—';

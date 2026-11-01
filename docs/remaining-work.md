@@ -227,13 +227,19 @@ pilot-priority order:
    contract-level rows (blank code = every leaf) and per-item rows; a plan stored identically for every leaf comes back
    as one row per month. Site staff now have a web screen. *Open:* a per-item plan above 500 rows is not editable here
    (shown on the curve, replaced whole by a save); the latest approved figure per item is not shown beside the input.
-7. [ ] **Invoicing and payments.**
+7. [x] **Invoicing and payments** (finance and managers). Per contract the termin with reached / invoiced, and the next
+   one issued from approved progress (refused out of order or below its trigger, with the reason shown first). Invoice
+   detail: the server's DPP − uang muka − retensi + PPN, its payments and balance, a payment form with one
+   `Idempotency-Key` per form (an over-payment refused before sending), cancel while unpaid. Receivables by aging bucket,
+   unpaid confirmed vendor notas with the same payment form. *Open:* printing / PDF of an invoice, editing a payment,
+   a single-invoice GET (the detail reads the list).
 8. [x] **Company dashboard** (the same panels, live; finance and managers only, LLD §4).
 
-Checked in Chromium against PostgreSQL 16, 27 steps: sign-in, wrong password, picker, review and confirm, a site, a
+Checked in Chromium against PostgreSQL 16, 29 steps: sign-in, wrong password, picker, review and confirm, a site, a
 contract, its termin, a refused and a good RAB import, a category fix, an addendum, vendor bank data (and finance's view),
 a PR submitted and approved, a PO from it issued and partly received (an over-receipt refused), an opname month (a volume
-above the BOQ and a figure below the approved month refused) submitted and approved, the plan saved, members, sign-out,
+above the BOQ and a figure below the approved month refused) submitted and approved, the plan saved, termin 1 invoiced
+and paid in two parts (an over-payment refused, termin 2 held below its trigger), a vendor nota paid, members, sign-out,
 holding dashboard, refresh, 390 px screen. No console errors, no 5xx. Not yet automated in CI (it
 needs a browser and Postgres).
 

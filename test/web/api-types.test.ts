@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { Panels as ServerPanels } from '../../src/dashboard/panels.js';
 import type { VendorInvoiceRow } from '../../src/intake/review.js';
 import type { ImportSummary } from '../../src/boq/importer.js';
-import type { boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, progressReports, sites, vendors } from '../../src/db/schema.js';
+import type {
+  boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, progressReports, salesInvoices, sites, vendors,
+} from '../../src/db/schema.js';
+import type { PaymentInput as ServerPaymentInput, payables, publicPayment, receivables, termsStatus } from '../../src/finance/service.js';
 import type { getPo, getPr } from '../../src/procurement/service.js';
 import type { getReport, getSchedule, sCurve } from '../../src/progress/service.js';
 import type { withEffective } from '../../src/http/routes/company.js';
 import type {
-  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, PlanEntry, ProgressReport,
-  ProgressReportDetail, PurchaseOrderDetail, PurchaseRequestDetail, SCurveData, Site, Vendor,
+  Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, Payable, Payment, PaymentInput,
+  PlanEntry, ProgressReport, ProgressReportDetail, PurchaseOrderDetail, PurchaseRequestDetail, Receivable, SalesInvoice, SCurveData, Site,
+  TermsStatus, Vendor,
 } from '../../web/src/lib/types.js';
 
 /**
@@ -40,12 +44,19 @@ const report: Assignable<typeof progressReports.$inferSelect, ProgressReport> = 
 const reportDetail: Assignable<Awaited<ReturnType<typeof getReport>>, ProgressReportDetail> = true;
 const plan: Assignable<Awaited<ReturnType<typeof getSchedule>>[number], PlanEntry> = true;
 const curve: Assignable<Awaited<ReturnType<typeof sCurve>>, SCurveData> = true;
+/** invoicing: termin status, invoice rows, payments as the API shows them, aging rows; the payment body the other way */
+const termsStat: Assignable<Awaited<ReturnType<typeof termsStatus>>, TermsStatus> = true;
+const salesInvoice: Assignable<typeof salesInvoices.$inferSelect, SalesInvoice> = true;
+const payment: Assignable<ReturnType<typeof publicPayment>, Payment> = true;
+const receivable: Assignable<Awaited<ReturnType<typeof receivables>>[number], Receivable> = true;
+const payable: Assignable<Awaited<ReturnType<typeof payables>>[number], Payable> = true;
+const paymentInput: Assignable<PaymentInput, ServerPaymentInput> = true;
 
 describe('web API types follow the server', () => {
   it('compiles (the check is the assignment above)', () => {
     expect([
       dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary, prDetail, poDetail, receipt,
-      report, reportDetail, plan, curve,
-    ]).toEqual(Array(17).fill(true));
+      report, reportDetail, plan, curve, termsStat, salesInvoice, payment, receivable, payable, paymentInput,
+    ]).toEqual(Array(23).fill(true));
   });
 });
