@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Card, ErrorNotice, Loading, Pill } from '../components/ui';
 import { api } from '../lib/api';
-import { dateLabel, qtyLabel, rupiah } from '../lib/format';
+import { dateLabel, qtyLabel, rupiah, todayWib } from '../lib/format';
 import { emptyLine, grBody, lineTotalCents, poBody, poFormFromPr, prBody, receiptRows, type LineForm, type PoForm, type PrForm } from '../lib/procurement';
 import { useAsync } from '../lib/useAsync';
 import type { Contract, PoStatus, PrStatus, PurchaseOrderDetail, PurchaseRequestDetail, Site, Vendor } from '../lib/types';
@@ -11,9 +11,6 @@ const PR_LABEL: Record<PrStatus, string> = { draft: 'Draf', submitted: 'Diajukan
 const PR_TONE: Record<PrStatus, 'plain' | 'amber' | 'green' | 'red'> = { draft: 'plain', submitted: 'amber', approved: 'green', rejected: 'red', closed: 'plain' };
 const PO_LABEL: Record<PoStatus, string> = { draft: 'Draf', issued: 'Terbit', partial: 'Diterima sebagian', received: 'Diterima', cancelled: 'Dibatalkan' };
 const PO_TONE: Record<PoStatus, 'plain' | 'amber' | 'green' | 'red'> = { draft: 'plain', issued: 'amber', partial: 'amber', received: 'green', cancelled: 'red' };
-
-/** "2026-10" (WIB month) is not a date; today in WIB as "YYYY-MM-DD" */
-const todayWib = () => new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10);
 
 type Lookups = { sites: Site[]; vendors: Vendor[]; contracts: Contract[] };
 type Panel = { kind: 'new-pr' } | { kind: 'new-po'; from?: PoForm } | { kind: 'pr'; id: number } | { kind: 'po'; id: number };

@@ -12,6 +12,7 @@ import { ROLE_LABEL } from '../lib/status';
 import { useAsync } from '../lib/useAsync';
 import type { CompanyRole, Me, MyCompany } from '../lib/types';
 import { IntakeReview } from './IntakeReview';
+import { Invoicing } from './Invoicing';
 import { Procurement } from './Procurement';
 import { Progress } from './Progress';
 import { ContractDetail } from './master/ContractDetail';
@@ -20,7 +21,7 @@ import { Members } from './master/Members';
 import { Sites } from './master/Sites';
 import { Vendors } from './master/Vendors';
 
-export const COMPANY_VIEWS = ['home', 'intake', 'dashboard', 'progress', 'procurement', 'contracts', 'sites', 'vendors', 'members'] as const;
+export const COMPANY_VIEWS = ['home', 'intake', 'dashboard', 'progress', 'procurement', 'invoicing', 'contracts', 'sites', 'vendors', 'members'] as const;
 export type CompanyView = (typeof COMPANY_VIEWS)[number];
 
 const VIEW: Record<Exclude<CompanyView, 'home'>, { label: string; roles: readonly CompanyRole[] }> = {
@@ -28,6 +29,7 @@ const VIEW: Record<Exclude<CompanyView, 'home'>, { label: string; roles: readonl
   intake: { label: 'Review nota', roles: REVIEW_ROLES },
   progress: { label: 'Progres & opname', roles: PROGRESS_ROLES },
   procurement: { label: 'Pembelian', roles: MASTER_ROLES },
+  invoicing: { label: 'Tagihan & pembayaran', roles: FINANCE_ROLES },
   contracts: { label: 'Kontrak', roles: MASTER_ROLES },
   sites: { label: 'Lokasi', roles: MASTER_ROLES },
   vendors: { label: 'Vendor', roles: MASTER_ROLES },
@@ -41,7 +43,7 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
   const base = `/c/${company.id}`;
   const role = company.role;
   const item = (v: Exclude<CompanyView, 'home'>): NavItem[] => (can(role, VIEW[v].roles) ? [{ to: `${base}/${v}`, label: VIEW[v].label }] : []);
-  const work = [...item('dashboard'), ...item('intake'), ...item('progress'), ...item('procurement')];
+  const work = [...item('dashboard'), ...item('intake'), ...item('progress'), ...item('procurement'), ...item('invoicing')];
   const master = [...item('contracts'), ...item('sites'), ...item('vendors'), ...item('members')];
   const nav: Array<NavItem | { head: string }> = [
     { head: company.code }, ...work,
@@ -84,6 +86,7 @@ export function CompanyArea({ me, company, view, itemId, onSignOut }: {
       {allowed && view === 'progress' && (
         <Progress companyId={company.id} canReport={can(role, OPNAME_ROLES)} canPlan={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />
       )}
+      {allowed && view === 'invoicing' && <Invoicing companyId={company.id} />}
       {allowed && view === 'procurement' && <Procurement companyId={company.id} canEdit={can(role, EDIT_ROLES)} canApprove={can(role, APPROVE_ROLES)} />}
       {allowed && view === 'sites' && <Sites companyId={company.id} canEdit={can(role, EDIT_ROLES)} />}
       {allowed && view === 'vendors' && <Vendors companyId={company.id} canEdit={can(role, VENDOR_WRITE_ROLES)} seesPii={can(role, FINANCE_ROLES)} />}
