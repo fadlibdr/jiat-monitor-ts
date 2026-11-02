@@ -480,6 +480,41 @@ export interface SCurveData { points: SCurvePctPoint[]; latest: SCurvePctPoint |
 export interface OpnameLineInput { boqItemId: number; qtyDone?: string; cumulativePct?: number }
 export interface ProgressReportInput { contractId: number; period: string; note?: string }
 
+// --- system admin (routes/admin.ts): configuration, never transaction data ---
+
+/** A company with its letterhead data (printed on invoices and POs). */
+export interface AdminCompany {
+  id: number;
+  code: string;
+  name: string;
+  npwp: string | null;
+  address: string | null;
+  bankName: string | null;
+  bankAccount: string | null;
+  logoPath: string | null;
+  docPrefix: string | null;
+}
+export interface CompanyInput { code: string; name: string; npwp?: string; address?: string; bankName?: string; bankAccount?: string; docPrefix?: string; managerEmail?: string }
+export type CompanyPatch = Partial<Omit<CompanyInput, 'code' | 'managerEmail'>>;
+export interface AdminUser {
+  id: number;
+  email: string;
+  name: string;
+  phone: string | null;
+  telegramUserId: number | null;
+  isActive: boolean;
+  isSystemAdmin: boolean;
+}
+export interface UserPatch { name?: string; phone?: string | null; telegramUserId?: number | null; isActive?: boolean; isSystemAdmin?: boolean }
+/** A company's site by name (GET /admin/companies/:id/sites) */
+export interface AdminSite { id: number; code: string; name: string; status: string }
+/** A Telegram group mapped to a company and site: notas sent there land in that site's intake. */
+export interface TelegramChat { id: number; chatId: number; companyId: number; siteId: number; title: string | null; isActive: boolean }
+export interface TelegramChatInput { chatId: number; companyId: number; siteId: number; title?: string; isActive?: boolean }
+export type TelegramChatPatch = { siteId?: number; title?: string | null; isActive?: boolean };
+export type ManagementRole = 'holding_viewer' | 'direksi';
+export interface ManagementViewer { userId: number; email: string; name: string; role: ManagementRole; grantedBy: number | null; grantedAt: string | Date | null }
+
 // --- invoicing and payments (routes/finance.ts) ---
 
 /** A termin with whether approved progress reached its trigger and whether it has a live invoice. */

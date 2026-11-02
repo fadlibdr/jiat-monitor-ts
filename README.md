@@ -183,6 +183,7 @@ Admin sistem global (`users.is_system_admin`) dan holding viewer (`management_vi
 | GET | `/holding/companies` · `/holding/contracts` | hanya `management_viewers`; read-only; filter `companies[]`, `site_id`, `employer`, `status`; setiap request dicatat di `audit_logs` |
 | GET/POST/PATCH | `/admin/companies[/:companyId]` | admin sistem; `managerEmail` = `company_manager` pertama |
 | GET/POST/DELETE | `/admin/companies/:companyId/members[/:userId]` | sama seperti di atas, tanpa harus menjadi anggota |
+| GET | `/admin/companies/:companyId/sites` | nama lokasi saja (id, kode, nama, status) untuk memetakan grup Telegram dan lokasi anggota; data proyek tetap tertutup |
 | GET/PATCH | `/admin/users[/:userId]` | `telegramUserId`, `phone`, `isActive`, `isSystemAdmin`; `409` menonaktifkan/mencabut diri sendiri |
 | GET/POST/DELETE | `/admin/management-viewers[/:userId]` | `{email, role: holding_viewer\|direksi}` |
 | GET/POST/PATCH | `/admin/telegram-chats[/:id]` | grup Telegram → perusahaan + site; site harus milik perusahaan itu |
@@ -217,8 +218,9 @@ Analisis lengkap terhadap HLD v0.2, LLD, deck v0.2, dan mockup dashboard holding
 1. **Golden set intake** (LLD §10): 30 foto nota asli dijalankan ke OCR sungguhan, hasil di `test/golden/results.csv`. Adapter OCR dan klien Telegram baru diuji terhadap server palsu.
 2. **Fixture RAB Keerom `versi_2_RAPI` asli** di `test/fixtures/boq/` + nilai DPP kontrak: importer terbukti pada layout sintetis, belum pada file sebenarnya.
 3. **Konfirmasi bagian keuangan** atas rumus tagihan termin (retensi, potongan uang muka, dasar PPN) — `src/domain/invoice.ts`.
-4. **UI, sisa**: **ekspor PDF** laporan bulanan, kop surat perusahaan pada cetakan, layar admin sistem. Sudah ada:
-   masuk, pilih perusahaan, review nota, dashboard perusahaan & holding, data master (kontrak, termin, addendum, BOQ,
-   lokasi, vendor, anggota), pembelian (PR → PO → penerimaan barang, cetak PO), progres (opname bulanan, persetujuan,
-   rencana kurva S), tagihan termin dan pembayaran (piutang per umur, hutang vendor, cetak tagihan dengan terbilang).
+4. **UI, sisa**: **ekspor PDF** laporan bulanan, kop surat perusahaan pada cetakan (datanya sudah diisi di admin sistem).
+   Sudah ada: masuk, pilih perusahaan, review nota, dashboard perusahaan & holding, data master (kontrak, termin,
+   addendum, BOQ, lokasi, vendor, anggota), pembelian (PR → PO → penerimaan barang, cetak PO), progres (opname bulanan,
+   persetujuan, rencana kurva S), tagihan termin dan pembayaran (piutang per umur, hutang vendor, cetak tagihan dengan
+   terbilang), admin sistem (perusahaan, anggota, pengguna, grup Telegram, akses holding).
 5. **Deploy ke VPS**: contoh konfigurasi di `deploy/` (Supervisor, nginx, cron); provider object storage (S3) masih terbuka.

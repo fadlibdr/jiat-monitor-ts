@@ -5,6 +5,8 @@ import type {
   GoodsReceipt, GrInput, PoInput, PoStatus, PrInput, PurchaseOrder, PurchaseOrderDetail, PurchaseRequest, PurchaseRequestDetail,
   OpnameLineInput, PlanEntry, ProgressReport, ProgressReportDetail, ProgressReportInput, SCurveData,
   AgingBucket, Payable, PayableType, Payment, PaymentInput, Receivable, SalesInvoice, TermsStatus,
+  AdminCompany, AdminSite, AdminUser, CompanyInput, CompanyPatch, ManagementRole, ManagementViewer, TelegramChat, TelegramChatInput,
+  TelegramChatPatch, UserPatch,
 } from './types';
 import { errorMessage } from './errors';
 
@@ -192,6 +194,29 @@ export const api = {
 
   companyDashboard: (companyId: number, period: string) =>
     request<{ data: Panels }>('GET', `/companies/${companyId}/dashboard${qs({ period })}`).then((r) => r.data),
+
+  /** System admin (everything under /admin is 403 for anyone else). */
+  admin: {
+    companies: () => request<{ data: AdminCompany[] }>('GET', '/admin/companies').then((r) => r.data),
+    /** managerEmail: an existing account that becomes the first company_manager */
+    createCompany: (body: CompanyInput) => request<{ data: AdminCompany }>('POST', '/admin/companies', body).then((r) => r.data),
+    patchCompany: (companyId: number, body: CompanyPatch) => request<{ data: AdminCompany }>('PATCH', `/admin/companies/${companyId}`, body).then((r) => r.data),
+    sites: (companyId: number) => request<{ data: AdminSite[] }>('GET', `/admin/companies/${companyId}/sites`).then((r) => r.data),
+    members: (companyId: number) => request<{ data: Member[] }>('GET', `/admin/companies/${companyId}/members`).then((r) => r.data),
+    putMember: (companyId: number, body: { email: string; role: CompanyRole; siteIds?: number[] }) =>
+      request<unknown>('POST', `/admin/companies/${companyId}/members`, body),
+    removeMember: (companyId: number, userId: number) => request<unknown>('DELETE', `/admin/companies/${companyId}/members/${userId}`),
+    users: () => request<{ data: AdminUser[] }>('GET', '/admin/users').then((r) => r.data),
+    /** deactivating ends the user's sessions at once; an admin cannot deactivate or demote itself (409) */
+    patchUser: (userId: number, body: UserPatch) => request<{ data: AdminUser }>('PATCH', `/admin/users/${userId}`, body).then((r) => r.data),
+    chats: () => request<{ data: TelegramChat[] }>('GET', '/admin/telegram-chats').then((r) => r.data),
+    createChat: (body: TelegramChatInput) => request<{ data: TelegramChat }>('POST', '/admin/telegram-chats', body).then((r) => r.data),
+    patchChat: (id: number, body: TelegramChatPatch) => request<{ data: TelegramChat }>('PATCH', `/admin/telegram-chats/${id}`, body).then((r) => r.data),
+    viewers: () => request<{ data: ManagementViewer[] }>('GET', '/admin/management-viewers').then((r) => r.data),
+    /** upsert by email */
+    putViewer: (email: string, role: ManagementRole) => request<unknown>('POST', '/admin/management-viewers', { email, role }),
+    removeViewer: (userId: number) => request<unknown>('DELETE', `/admin/management-viewers/${userId}`),
+  },
 
   holdingDashboard: (q: HoldingQuery) => request<HoldingDashboard>('GET', `/holding/dashboard${qs(holdingParams(q))}`),
   holdingRefresh: () => request<{ data: HoldingRefresh }>('POST', '/holding/refresh').then((r) => r.data),

@@ -24,7 +24,10 @@ export function Home({ me, companies, onSignOut }: { me: Me; companies: MyCompan
               <span aria-hidden>→</span>
             </Link>
           ))}
-          {!me.holdingViewer && companies.length === 0 && (
+          {me.isSystemAdmin && (
+            <Link to="/admin/companies"><span><b>Admin sistem</b><br /><span className="muted small">Perusahaan, pengguna, grup Telegram, akses holding</span></span><span aria-hidden>→</span></Link>
+          )}
+          {!me.holdingViewer && !me.isSystemAdmin && companies.length === 0 && (
             <div className="notice">Akun Anda belum terdaftar di perusahaan mana pun. Hubungi admin sistem.</div>
           )}
         </div>

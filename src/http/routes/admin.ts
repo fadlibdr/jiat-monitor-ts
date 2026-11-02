@@ -86,6 +86,18 @@ export function registerAdminRoutes(app: App, deps: RouteDeps): void {
   });
   const pass: MiddlewareHandler<AppEnv> = async (_c, next) => { await next(); };
   registerMemberRoutes(app, '/admin/companies/:companyId/members', deps, { canRead: pass, canWrite: pass });
+  /**
+   * A company's sites by name, for what the admin configures: a Telegram group's site and a member's sites.
+   * Names only (config); the company's project data stays closed to an admin who is not a member.
+   */
+  app.get('/admin/companies/:companyId/sites', async (c) => {
+    const { companyId } = CompanyParams.parse(c.req.param());
+    const company = await withApp(db, (tx) => tx.query.companies.findFirst({ where: eq(companies.id, companyId), columns: { id: true } }));
+    if (!company) notFound('Perusahaan tidak ditemukan.');
+    const rows = await withCompany(db, companyId, (tx) =>
+      tx.select({ id: sites.id, code: sites.code, name: sites.name, status: sites.status }).from(sites).orderBy(asc(sites.code)));
+    return c.json({ data: rows });
+  });
 
   // --- users ---
   app.get('/admin/users', async (c) => {
