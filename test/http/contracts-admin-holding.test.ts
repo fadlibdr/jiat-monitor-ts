@@ -260,6 +260,7 @@ describe('admin (global system admin)', () => {
     expect(Object.keys(rows[0]!).sort()).toEqual(['code', 'id', 'name', 'status']);
     expect((await app.request(`/admin/companies/${A}/sites`, { headers: as(mgr) })).status).toBe(403);
     expect((await app.request('/admin/companies/999999/sites', { headers: as(admin) })).status).toBe(404);
+    expect((await app.request('/admin/companies/abc/sites', { headers: as(admin) })).status).toBe(400);
   });
 
   it('PATCH company updates profile fields; an unknown company is 404', async () => {
