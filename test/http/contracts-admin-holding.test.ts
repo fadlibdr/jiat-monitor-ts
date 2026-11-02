@@ -254,6 +254,14 @@ describe('admin (global system admin)', () => {
     expect((await app.request(`/companies/${B}/contracts`, { headers: as(admin) })).status).toBe(403);
   });
 
+  it('lists a company\'s sites by name only (for Telegram groups and member sites), not its project data', async () => {
+    const rows = await data<Array<Record<string, unknown>>>(await app.request(`/admin/companies/${A}/sites`, { headers: as(admin) }));
+    expect(rows.map((r) => r['code'])).toEqual(['BLM', 'KRM']);
+    expect(Object.keys(rows[0]!).sort()).toEqual(['code', 'id', 'name', 'status']);
+    expect((await app.request(`/admin/companies/${A}/sites`, { headers: as(mgr) })).status).toBe(403);
+    expect((await app.request('/admin/companies/999999/sites', { headers: as(admin) })).status).toBe(404);
+  });
+
   it('PATCH company updates profile fields; an unknown company is 404', async () => {
     const res = await app.request(`/admin/companies/${A}`, send(admin, 'PATCH', { bankName: 'Bank Papua', bankAccount: '123-456-789' }));
     expect(await data(res)).toMatchObject({ bankName: 'Bank Papua', bankAccount: '123-456-789', code: 'AAA' });

@@ -3,6 +3,7 @@ import { ErrorNotice, Loading } from './components/ui';
 import { api, ApiError, setUnauthorizedHandler } from './lib/api';
 import { match, navigate, usePath } from './lib/router';
 import type { Me, MyCompany } from './lib/types';
+import { ADMIN_VIEWS, AdminArea, type AdminView } from './pages/Admin';
 import { CompanyArea, COMPANY_VIEWS, type CompanyView } from './pages/CompanyArea';
 import { HoldingDashboard } from './pages/HoldingDashboard';
 import { Home } from './pages/Home';
@@ -57,6 +58,15 @@ export function App() {
   const { me, companies } = session;
   if (path === '/holding') {
     return me.holdingViewer ? <HoldingDashboard me={me} onSignOut={signOut} /> : <NotFound text="Halaman holding hanya untuk holding viewer." />;
+  }
+  const a = path === '/admin' ? {} : match('/admin/:view', path) ?? match('/admin/:view/:itemId', path);
+  if (a) {
+    if (!me.isSystemAdmin) return <NotFound text="Halaman admin hanya untuk admin sistem." />;
+    const view = (a['view'] ?? 'companies') as AdminView;
+    // only a company has a detail page (/admin/companies/:id)
+    const itemId = a['itemId'] === undefined ? undefined : /^\d{1,15}$/.test(a['itemId']) ? Number(a['itemId']) : NaN;
+    if (!ADMIN_VIEWS.includes(view) || Number.isNaN(itemId) || (itemId !== undefined && view !== 'companies')) return <NotFound text="Halaman tidak ditemukan." />;
+    return <AdminArea me={me} view={view} itemId={itemId} onSignOut={signOut} />;
   }
   const c = match('/c/:companyId', path) ?? match('/c/:companyId/:view', path) ?? match('/c/:companyId/:view/:itemId', path);
   if (c) {

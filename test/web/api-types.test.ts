@@ -3,13 +3,15 @@ import type { Panels as ServerPanels } from '../../src/dashboard/panels.js';
 import type { VendorInvoiceRow } from '../../src/intake/review.js';
 import type { ImportSummary } from '../../src/boq/importer.js';
 import type {
-  boqItems, boqVersions, contractAddendums, contractTerms, goodsReceipts, progressReports, salesInvoices, sites, vendors,
+  boqItems, boqVersions, companies, contractAddendums, contractTerms, goodsReceipts, managementViewers, progressReports, salesInvoices, sites,
+  telegramChats, users, vendors,
 } from '../../src/db/schema.js';
 import type { PaymentInput as ServerPaymentInput, payables, publicPayment, receivables, termsStatus } from '../../src/finance/service.js';
 import type { getPo, getPr } from '../../src/procurement/service.js';
 import type { getReport, getSchedule, sCurve } from '../../src/progress/service.js';
 import type { withEffective } from '../../src/http/routes/company.js';
 import type {
+  AdminCompany, AdminSite, AdminUser, ManagementViewer, TelegramChat,
   Addendum, BoqImportSummary, BoqItem, BoqVersion, Contract, ContractTerm, GoodsReceipt, IntakeRow, Panels, Payable, Payment, PaymentInput,
   PlanEntry, ProgressReport, ProgressReportDetail, PurchaseOrderDetail, PurchaseRequestDetail, Receivable, SalesInvoice, SCurveData, Site,
   TermsStatus, Vendor,
@@ -51,12 +53,21 @@ const payment: Assignable<ReturnType<typeof publicPayment>, Payment> = true;
 const receivable: Assignable<Awaited<ReturnType<typeof receivables>>[number], Receivable> = true;
 const payable: Assignable<Awaited<ReturnType<typeof payables>>[number], Payable> = true;
 const paymentInput: Assignable<PaymentInput, ServerPaymentInput> = true;
+/** system admin (routes/admin.ts): the rows it selects */
+type U = typeof users.$inferSelect;
+type V = typeof managementViewers.$inferSelect;
+const adminCompany: Assignable<typeof companies.$inferSelect, AdminCompany> = true;
+const adminUser: Assignable<Pick<U, 'id' | 'email' | 'name' | 'phone' | 'telegramUserId' | 'isActive' | 'isSystemAdmin'>, AdminUser> = true;
+const adminSite: Assignable<Pick<typeof sites.$inferSelect, 'id' | 'code' | 'name' | 'status'>, AdminSite> = true;
+const telegramChat: Assignable<typeof telegramChats.$inferSelect, TelegramChat> = true;
+const viewer: Assignable<{ userId: U['id']; email: U['email']; name: U['name']; role: V['role']; grantedBy: V['grantedBy']; grantedAt: V['grantedAt'] }, ManagementViewer> = true;
 
 describe('web API types follow the server', () => {
   it('compiles (the check is the assignment above)', () => {
     expect([
       dashboardPanels, intakeRow, site, vendor, contract, term, addendum, boqVersion, boqItem, importSummary, prDetail, poDetail, receipt,
       report, reportDetail, plan, curve, termsStat, salesInvoice, payment, receivable, payable, paymentInput,
-    ]).toEqual(Array(23).fill(true));
+      adminCompany, adminUser, adminSite, telegramChat, viewer,
+    ]).toEqual(Array(28).fill(true));
   });
 });

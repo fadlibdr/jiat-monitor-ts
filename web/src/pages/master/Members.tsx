@@ -13,8 +13,25 @@ const ROLES: CompanyRole[] = ['site_staff', 'project_admin', 'finance', 'company
  * admin first (the API answers 404 for an unknown email). The last company_manager cannot be removed
  * or demoted (409), so the company can always be managed.
  */
-export function Members({ companyId, canManage }: { companyId: number; canManage: boolean }) {
-  const list = useAsync(() => Promise.all([api.members(companyId), api.sites(companyId)]), [companyId]);
+/** Where the members come from: the company's own endpoints, or the system admin's (/admin/companies/:id/…). */
+export interface MemberOps {
+  members: () => Promise<Member[]>;
+  sites: () => Promise<Array<Pick<Site, 'id' | 'name'>>>;
+  put: (body: { email: string; role: CompanyRole; siteIds?: number[] }) => Promise<unknown>;
+  remove: (userId: number) => Promise<unknown>;
+}
+
+export const companyMemberOps = (companyId: number): MemberOps => ({
+  members: () => api.members(companyId),
+  sites: () => api.sites(companyId),
+  put: (body) => api.putMember(companyId, body),
+  remove: (userId) => api.removeMember(companyId, userId),
+});
+
+export function Members({ companyId, canManage, ops = companyMemberOps(companyId), heading = 'Data master' }: {
+  companyId: number; canManage: boolean; ops?: MemberOps; heading?: string;
+}) {
+  const list = useAsync(() => Promise.all([ops.members(), ops.sites()]), [companyId]);
   const [members, sites] = list.data ?? [[], []];
   const [open, setOpen] = useState<number | 'new'>();
   const [note, setNote] = useState<Note>();
@@ -24,7 +41,7 @@ export function Members({ companyId, canManage }: { companyId: number; canManage
   const remove = async (m: Member) => {
     if (!window.confirm(`Keluarkan ${m.name || m.email} dari perusahaan ini?`)) return;
     try {
-      await api.removeMember(companyId, m.userId);
+      await ops.remove(m.userId);
       setNote({ tone: 'ok', text: `${m.name || m.email} dikeluarkan.` });
       setOpen(undefined);
       list.reload();
@@ -36,7 +53,7 @@ export function Members({ companyId, canManage }: { companyId: number; canManage
   return (
     <>
       <div className="page-head">
-        <div className="eyebrow">Data master</div>
+        <div className="eyebrow">{heading}</div>
         <h1>Anggota</h1>
       </div>
       <div className="review">
@@ -65,9 +82,9 @@ export function Members({ companyId, canManage }: { companyId: number; canManage
           )}
         </Card>
         <div className="detail">
-          {open === 'new' && <MemberEditor key="new" companyId={companyId} sites={sites} canManage={canManage} onSaved={(email) => { setNote({ tone: 'ok', text: `${email} disimpan.` }); list.reload(); }} />}
+          {open === 'new' && <MemberEditor key="new" ops={ops} sites={sites} canManage={canManage} onSaved={(email) => { setNote({ tone: 'ok', text: `${email} disimpan.` }); list.reload(); }} />}
           {member && (
-            <MemberEditor key={member.userId} companyId={companyId} member={member} sites={sites} canManage={canManage}
+            <MemberEditor key={member.userId} ops={ops} member={member} sites={sites} canManage={canManage}
               onSaved={() => list.reload()} onRemove={() => void remove(member)} />
           )}
           {open === undefined && <Card><div className="empty">Pilih anggota untuk melihat atau mengubah peran dan lokasinya.</div></Card>}
@@ -83,8 +100,8 @@ function siteScope(m: Member, siteName: Map<number, string>): string {
   return m.siteIds.map((id) => siteName.get(id) ?? `#${id}`).join(', ');
 }
 
-function MemberEditor({ companyId, member, sites, canManage, onSaved, onRemove }: {
-  companyId: number; member?: Member; sites: Site[]; canManage: boolean; onSaved: (email: string) => void; onRemove?: () => void;
+function MemberEditor({ ops, member, sites, canManage, onSaved, onRemove }: {
+  ops: MemberOps; member?: Member; sites: Array<Pick<Site, 'id' | 'name'>>; canManage: boolean; onSaved: (email: string) => void; onRemove?: () => void;
 }) {
   const [email, setEmail] = useState(member?.email ?? '');
   const [role, setRole] = useState<CompanyRole>(member?.role ?? 'site_staff');
@@ -103,7 +120,7 @@ function MemberEditor({ companyId, member, sites, canManage, onSaved, onRemove }
     setNote(undefined);
     try {
       // no site ticked = every site (for roles other than site staff)
-      await api.putMember(companyId, { email: email.trim(), role, ...(siteIds.length ? { siteIds } : {}) });
+      await ops.put({ email: email.trim(), role, ...(siteIds.length ? { siteIds } : {}) });
       setNote({ tone: 'ok', text: 'Tersimpan.' });
       onSaved(email.trim());
     } catch (err) {

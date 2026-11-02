@@ -217,7 +217,12 @@ pilot-priority order:
 3. [x] **Holding dashboard** per the mockup: filters, refresh, XLSX export, S-curve on a calendar axis.
 4. [x] **Master data:** sites, contracts, termin, addendum, BOQ import with its summary and errors, members. Also vendors
    (bank and NPWP only for finance and managers) and per-item cost categories. Rupiah fields use the server's own parser.
-   *Open:* reading the plan (time schedule) from the RAB workbook; system-admin screens (companies, users, Telegram groups).
+   *Open:* reading the plan (time schedule) from the RAB workbook.
+   **System admin** (`/admin`, system admins only): companies with their letterhead fields (NPWP, address, bank) and a
+   first manager, the members of any company without being one, users (profile, Telegram id, deactivate, admin
+   right), Telegram groups → company + site, holding access. `GET /admin/companies/:id/sites` (names only) was added
+   so the admin can pick a site; the company's project data stays closed to it. *Open:* creating an account from the
+   web (still `src/cli/create-user.ts`), clearing a company profile field.
 5. [x] **PR/PO/GR forms and approvals.** PR with lines (optionally tied to BOQ items), submit / approve / reject; PO from an
    approved PR or blank, issue or cancel; goods receipts per line with an `Idempotency-Key` per form. Quantities and line
    totals use the server's own code (`src/domain/quantity.ts`). An issued PO prints for the vendor (A4, total in
