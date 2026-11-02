@@ -286,6 +286,8 @@ function TelegramGroups() {
           <p><button type="button" className="btn" onClick={() => { setFlash(undefined); setOpen('new'); }}>Petakan grup</button></p>
           <Notice note={flash} />
           {chats.error && <ErrorNotice error={chats.error} onRetry={chats.reload} />}
+          {/* without the companies the picker is empty and codes show as #id: say why */}
+          {companies.error && <ErrorNotice error={companies.error} onRetry={companies.reload} />}
           {chats.loading && !chats.data && <Loading what="grup" />}
           {chats.data && chats.data.length === 0 && <div className="empty">Belum ada grup yang dipetakan.</div>}
           {chats.data && chats.data.length > 0 && (
