@@ -101,7 +101,8 @@ function CompanyDetail({ companyId }: { companyId: number }) {
       {company && (
         <>
           <Head title={company.name} />
-          <CompanyEditor key={JSON.stringify(company)} company={company} onSaved={() => list.reload()} />
+          {/* keyed by id, not content: a reload after saving must not remount it and drop "disimpan" */}
+          <CompanyEditor key={company.id} company={company} onSaved={() => list.reload()} />
           <Members companyId={companyId} canManage ops={ops} heading={`Anggota ${company.code}`} />
         </>
       )}
@@ -206,7 +207,7 @@ function Users({ me }: { me: Me }) {
         </Card>
         <div className="detail">
           {user
-            ? <UserEditor key={JSON.stringify(user)} user={user} self={user.id === me.id} onSaved={() => list.reload()} />
+            ? <UserEditor key={user.id} user={user} self={user.id === me.id} onSaved={() => list.reload()} />
             : <Card><div className="empty">Pilih pengguna.</div></Card>}
         </div>
       </div>
@@ -311,7 +312,7 @@ function TelegramGroups() {
           {open === 'new' && (
             <NewChat companies={companies.data ?? []} onSaved={(c) => { chats.reload(); setOpen(c.id); setFlash({ tone: 'ok', text: `Grup ${c.title ?? c.chatId} dipetakan.` }); }} />
           )}
-          {chat && <ChatEditor key={JSON.stringify(chat)} chat={chat} companyCode={companyCode(chat.companyId)} onSaved={() => chats.reload()} />}
+          {chat && <ChatEditor key={chat.id} chat={chat} companyCode={companyCode(chat.companyId)} onSaved={() => chats.reload()} />}
           {open === undefined && <Card><div className="empty">Pilih grup, atau petakan grup baru.</div></Card>}
         </div>
       </div>
